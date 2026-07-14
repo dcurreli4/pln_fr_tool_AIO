@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches:
+      - main
 
 jobs:
   release:
@@ -15,9 +15,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Crea Release
+      - name: Leggi VERSION_LAUNCHER
+        id: version
+        run: |
+          VERSION=$(grep -oP 'VERSION_LAUNCHER\s*=\s*"\K[^"]+' "HUB Tool - All-in-one.pyw")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Controlla se il tag esiste già
+        id: check_tag
+        run: |
+          if git ls-remote --tags origin "refs/tags/v${{ steps.version.outputs.version }}" | grep -q .; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Crea tag e Release
+        if: steps.check_tag.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          name: "HUB Tool AIO ${{ github.ref_name }}"
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "HUB Tool AIO ${{ steps.version.outputs.tag }}"
           files: "HUB Tool - All-in-one.pyw"
           generate_release_notes: true
