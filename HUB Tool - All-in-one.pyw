@@ -164,8 +164,47 @@ def _ensure_dependencies():
         )
         sys.exit(1)
 _ensure_dependencies()
-_splash.set("Caricamento interfaccia...")
+
+# ── Controllo aggiornamenti ──────────────────────────────────────────────────
+_UPDATE_INFO = None  # (latest_version, download_url) oppure None
+
+def _check_update_available():
+    global _UPDATE_INFO
+    try:
+        import requests as _req
+        resp = _req.get(
+            "https://api.github.com/repos/dcurreli4/pln_fr_tool_AIO/releases/latest",
+            timeout=5,
+        )
+        if resp.status_code != 200:
+            return
+        data = resp.json()
+        tag = data.get("tag_name", "")
+        latest = tag.lstrip("v")
+        if not latest:
+            return
+        def _vtuple(v):
+            try:
+                return tuple(int(x) for x in v.split("."))
+            except Exception:
+                return (0,)
+        if _vtuple(latest) > _vtuple(VERSION_LAUNCHER):
+            assets = data.get("assets", [])
+            url = next(
+                (a["browser_download_url"] for a in assets if a["name"].endswith(".pyw")),
+                None,
+            )
+            if url:
+                _UPDATE_INFO = (latest, url)
+    except Exception:
+        pass
+
+_splash.set("Controllo aggiornamenti...")
 _splash.progress((_N_DEPS + 1) / (_N_DEPS + 2))
+_check_update_available()
+
+_splash.set("Caricamento interfaccia...")
+_splash.progress(1.0)
 
 # ── Fine auto-install ────────────────────────────────────────────────────────
 
@@ -11666,6 +11705,85 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         self._update_header(key)
 
 
+def _show_update_dialog(app):
+    if not _UPDATE_INFO:
+        return
+    latest, url = _UPDATE_INFO
+
+    popup = _tk.Toplevel(app)
+    popup.title("Aggiornamento disponibile")
+    popup.configure(bg=BG)
+    popup.resizable(False, False)
+    popup.grab_set()
+    W, H = 420, 210
+    x = app.winfo_x() + (app.winfo_width()  - W) // 2
+    y = app.winfo_y() + (app.winfo_height() - H) // 2
+    popup.geometry(f"{W}x{H}+{x}+{y}")
+
+    outer = _tk.Frame(popup, bg=BORDER, bd=1)
+    outer.pack(fill="both", expand=True, padx=1, pady=1)
+    inner = _tk.Frame(outer, bg=BG)
+    inner.pack(fill="both", expand=True, padx=1, pady=1)
+
+    _tk.Label(inner, text="Aggiornamento disponibile",
+              bg=BG, fg=TEXT_PRI, font=("Consolas", 12, "bold")).pack(pady=(20, 4))
+    _tk.Label(inner, text=f"Versione attuale:  {VERSION_LAUNCHER}",
+              bg=BG, fg=TEXT_SEC, font=("Consolas", 10)).pack()
+    _tk.Label(inner, text=f"Nuova versione:    {latest}",
+              bg=BG, fg=SUCCESS, font=("Consolas", 10, "bold")).pack(pady=(2, 16))
+
+    _tk.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=20)
+
+    status_var = _tk.StringVar()
+    status_lbl = _tk.Label(inner, textvariable=status_var,
+                           bg=BG, fg=TEXT_SEC, font=("Consolas", 9))
+    status_lbl.pack(pady=(8, 0))
+
+    btn_row = _tk.Frame(inner, bg=BG)
+    btn_row.pack(pady=(6, 16))
+
+    def _do_update():
+        btn_aggiorna.configure(state="disabled")
+        btn_dopo.configure(state="disabled")
+        status_var.set("Download in corso...")
+        popup.update()
+        try:
+            import requests as _req
+            import shutil
+            resp = _req.get(url, timeout=60, stream=True)
+            resp.raise_for_status()
+            current = Path(__file__)
+            tmp = current.with_suffix(".pyw.new")
+            with open(tmp, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            shutil.move(str(tmp), str(current))
+            status_var.set("Aggiornato. Riavvio in corso...")
+            popup.update()
+            import subprocess
+            subprocess.Popen([sys.executable, str(current)])
+            sys.exit(0)
+        except Exception as e:
+            status_var.set(f"Errore: {e}")
+            btn_dopo.configure(state="normal")
+
+    btn_aggiorna = _tk.Button(
+        btn_row, text="Aggiorna ora", command=_do_update,
+        bg=ACCENT, fg="#ffffff", font=("Consolas", 10, "bold"),
+        relief="flat", padx=18, pady=6, cursor="hand2",
+        activebackground=ACCENT, activeforeground="#ffffff",
+    )
+    btn_aggiorna.pack(side="left", padx=(0, 10))
+
+    btn_dopo = _tk.Button(
+        btn_row, text="Più tardi", command=popup.destroy,
+        bg=BG_CARD, fg=TEXT_SEC, font=("Consolas", 10),
+        relief="flat", padx=18, pady=6, cursor="hand2",
+        activebackground=BG_HOVER, activeforeground=TEXT_PRI,
+    )
+    btn_dopo.pack(side="left")
+
+
 if __name__ == "__main__":
     _splash.set("Pronto.")
     _splash.progress(1.0)
@@ -11677,4 +11795,5 @@ if __name__ == "__main__":
     app.attributes("-topmost", True)
     app.after(200, lambda: app.attributes("-topmost", False))
     app.focus_force()
+    app.after(500, lambda: _show_update_dialog(app))
     app.mainloop()
