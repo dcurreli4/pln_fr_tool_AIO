@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.4.4"
+VERSION_LAUNCHER = "1.4.5"
 
 
 _REQUIRED = {
@@ -11705,6 +11705,22 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         self._update_header(key)
 
 
+def _migrate_env():
+    """Aggiunge al .env le variabili di SETTINGS_SECTIONS non ancora presenti."""
+    if not _ENV.exists():
+        return []
+    existing = set(_read_env_raw().keys())
+    expected = [
+        field[0]
+        for _, fields in SETTINGS_SECTIONS
+        for field in fields
+    ]
+    missing = [k for k in expected if k not in existing]
+    if missing:
+        _write_env({k: "" for k in missing})
+    return missing
+
+
 def _show_update_dialog(app):
     if not _UPDATE_INFO:
         return
@@ -11795,6 +11811,8 @@ if __name__ == "__main__":
         _ENV.parent.mkdir(parents=True, exist_ok=True)
         _ENV.touch()
 
+    _new_keys = [] if _first_run else _migrate_env()
+
     app = Launcher()
     app.lift()
     app.attributes("-topmost", True)
@@ -11835,6 +11853,52 @@ if __name__ == "__main__":
                        activebackground=ACCENT, activeforeground="#ffffff").pack(pady=14)
 
         app.after(400, _show_first_run)
+    elif _new_keys:
+        def _show_migration_dialog():
+            popup = _tk.Toplevel(app)
+            popup.title("Nuove impostazioni disponibili")
+            popup.configure(bg=BG)
+            popup.resizable(False, False)
+            popup.grab_set()
+            W, H = 460, 210
+            x = app.winfo_x() + (app.winfo_width()  - W) // 2
+            y = app.winfo_y() + (app.winfo_height() - H) // 2
+            popup.geometry(f"{W}x{H}+{x}+{y}")
+
+            outer = _tk.Frame(popup, bg=BORDER, bd=1)
+            outer.pack(fill="both", expand=True, padx=1, pady=1)
+            inner = _tk.Frame(outer, bg=BG)
+            inner.pack(fill="both", expand=True, padx=1, pady=1)
+
+            _tk.Label(inner, text="Nuove impostazioni rilevate",
+                      bg=BG, fg=TEXT_PRI, font=("Consolas", 12, "bold")).pack(pady=(18, 4))
+            _tk.Label(inner,
+                      text=f"Questo aggiornamento ha introdotto {len(_new_keys)} nuova/e variabile/i\n"
+                           f"nel file di configurazione. Compilale per usare le nuove funzionalità.",
+                      bg=BG, fg=TEXT_SEC, font=("Consolas", 9), justify="center").pack(pady=(0, 4))
+
+            keys_text = "  •  " + "\n  •  ".join(_new_keys)
+            _tk.Label(inner, text=keys_text, bg=BG, fg=WARNING,
+                      font=("Consolas", 9), justify="left").pack(pady=(0, 12))
+
+            _tk.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=20)
+
+            def _go():
+                popup.destroy()
+                app._open_settings()
+
+            btn_row = _tk.Frame(inner, bg=BG)
+            btn_row.pack(pady=12)
+            _tk.Button(btn_row, text="Vai alle Impostazioni", command=_go,
+                       bg=ACCENT, fg="#ffffff", font=("Consolas", 10, "bold"),
+                       relief="flat", padx=18, pady=6, cursor="hand2",
+                       activebackground=ACCENT, activeforeground="#ffffff").pack(side="left", padx=(0, 10))
+            _tk.Button(btn_row, text="Più tardi", command=popup.destroy,
+                       bg=BG_CARD, fg=TEXT_SEC, font=("Consolas", 10),
+                       relief="flat", padx=18, pady=6, cursor="hand2",
+                       activebackground=BG_HOVER, activeforeground=TEXT_PRI).pack(side="left")
+
+        app.after(500, _show_migration_dialog)
     else:
         app.after(500, lambda: _show_update_dialog(app))
 
