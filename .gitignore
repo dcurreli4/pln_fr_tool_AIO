@@ -1,0 +1,45 @@
+# Chiavi SSH e certificati
+*.pem
+*.ppk
+*.key
+
+# File di input con dati sensibili (ID, PRM, ecc.)
+input/**/*.txt
+input/**/*.csv
+input/**/*.sql
+
+# Output generati dal tool (ignora contenuto, tieni la cartella)
+output/**
+!output/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+pip-log.txt
+
+# Ambienti virtuali
+.venv/
+venv/
+env/
+ENV/
+
+# Log
+*.log
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user

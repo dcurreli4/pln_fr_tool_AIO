@@ -1,0 +1,10 @@
+{
+  "PRD::Accounting- Copy file to entrée folder - 07/07": {
+    "project_key": "PRD",
+    "title": "Accounting- Copy file to entrée folder - 07/07",
+    "tipo_issue": "Tâche",
+    "priorita": "Major [2]",
+    "assegnatario": "alain.bellon",
+    "descrizione": "Hi,\n\n\n\n \n\nplease copy the contents of the attached ZIP files following the configuration defined in the attached {{<JIRA_TICKET>.cfg}} file.\n\n \n\n\nRegards"
+  }
+}
