@@ -11790,10 +11790,52 @@ if __name__ == "__main__":
     _splash._root.update()
     _splash._root.after(300, _splash.destroy)
     _splash._root.mainloop()
+    _first_run = not _ENV.exists()
+    if _first_run:
+        _ENV.parent.mkdir(parents=True, exist_ok=True)
+        _ENV.touch()
+
     app = Launcher()
     app.lift()
     app.attributes("-topmost", True)
     app.after(200, lambda: app.attributes("-topmost", False))
     app.focus_force()
-    app.after(500, lambda: _show_update_dialog(app))
+
+    if _first_run:
+        def _show_first_run():
+            popup = _tk.Toplevel(app)
+            popup.title("Prima configurazione")
+            popup.configure(bg=BG)
+            popup.resizable(False, False)
+            popup.grab_set()
+            W, H = 440, 180
+            x = app.winfo_x() + (app.winfo_width()  - W) // 2
+            y = app.winfo_y() + (app.winfo_height() - H) // 2
+            popup.geometry(f"{W}x{H}+{x}+{y}")
+
+            outer = _tk.Frame(popup, bg=BORDER, bd=1)
+            outer.pack(fill="both", expand=True, padx=1, pady=1)
+            inner = _tk.Frame(outer, bg=BG)
+            inner.pack(fill="both", expand=True, padx=1, pady=1)
+
+            _tk.Label(inner, text="Benvenuto in HUB Tool AIO",
+                      bg=BG, fg=TEXT_PRI, font=("Consolas", 12, "bold")).pack(pady=(20, 6))
+            _tk.Label(inner,
+                      text="Nessuna configurazione trovata.\nCompila le credenziali nella sezione Impostazioni per iniziare.",
+                      bg=BG, fg=TEXT_SEC, font=("Consolas", 9), justify="center").pack(pady=(0, 16))
+            _tk.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=20)
+
+            def _go():
+                popup.destroy()
+                app._open_settings()
+
+            _tk.Button(inner, text="Vai alle Impostazioni", command=_go,
+                       bg=ACCENT, fg="#ffffff", font=("Consolas", 10, "bold"),
+                       relief="flat", padx=18, pady=6, cursor="hand2",
+                       activebackground=ACCENT, activeforeground="#ffffff").pack(pady=14)
+
+        app.after(400, _show_first_run)
+    else:
+        app.after(500, lambda: _show_update_dialog(app))
+
     app.mainloop()
