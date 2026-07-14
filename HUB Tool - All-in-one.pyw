@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.4.1"
+VERSION_LAUNCHER = "1.4.2"
 
 
 _REQUIRED = {
