@@ -2216,7 +2216,13 @@ def _ade_load_query(hub_conn, flow: str):
     lines = []
     for l in row[0].strip().splitlines():
         if "DATETOINSERT" in l or "{COMMODITY}" in l:
-            lines.append("    1=1")
+            stripped = l.lstrip()
+            if stripped.lower().startswith("and "):
+                lines.append("    and 1=1")
+            elif stripped.lower().startswith("where "):
+                lines.append("    where 1=1")
+            else:
+                lines.append("    1=1")
         else:
             lines.append(l)
     return "\n".join(lines)
