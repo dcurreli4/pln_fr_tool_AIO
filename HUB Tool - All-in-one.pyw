@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.4.5"
+VERSION_LAUNCHER = "1.4.6"
 
 
 _REQUIRED = {
@@ -1178,6 +1178,8 @@ PAYMENT_QUERY_FILES = [
     "query_invoice_gas.sql",
     "query_payment_elec.sql",
     "query_payment_gas.sql",
+    "query_cheque_kj.sql",
+    "query_cheque_kh.sql",
 ]
 
 ALL_QUERY_FILES = [
@@ -1190,6 +1192,8 @@ ALL_QUERY_FILES = [
     "query_invoice_gas.sql",
     "query_payment_elec.sql",
     "query_payment_gas.sql",
+    "query_cheque_kj.sql",
+    "query_cheque_kh.sql",
 ]
 
 TARGET_TABLES_PAYMENT = {
@@ -1202,6 +1206,8 @@ TARGET_TABLES_PAYMENT = {
     "query_invoice_gas.sql":  "kraken_invoice_gas",
     "query_payment_elec.sql": "test_payments",
     "query_payment_gas.sql":  "test_payments_gas",
+    "query_cheque_kj.sql":    "kraken_cheque_statge_1",
+    "query_cheque_kh.sql":    "kraken_cheque_statge_2",
 }
 
 QUERY_FLAGS = {
@@ -1214,6 +1220,8 @@ QUERY_FLAGS = {
     "query_invoice_gas.sql":  "RUN_INVOICE_GAS",
     "query_payment_elec.sql": "RUN_PAYMENT_ELEC",
     "query_payment_gas.sql":  "RUN_PAYMENT_GAS",
+    "query_cheque_kj.sql":    "RUN_CHEQUE_KJ",
+    "query_cheque_kh.sql":    "RUN_CHEQUE_KH",
 }
 
 QUERY_FLAGS_IDENTIFIER = {
@@ -1224,6 +1232,8 @@ QUERY_FLAGS_IDENTIFIER = {
     "query_renewal.sql":      "RUN_IDENTIFIER_RENEWAL",
     "query_payment_elec.sql": "RUN_IDENTIFIER_PAYMENT_ELEC",
     "query_payment_gas.sql":  "RUN_IDENTIFIER_PAYMENT_GAS",
+    "query_cheque_kj.sql":    "RUN_IDENTIFIER_CHEQUE_KJ",
+    "query_cheque_kh.sql":    "RUN_IDENTIFIER_CHEQUE_KH",
 }
 
 QUERY_FLAGS_REFERENCE = {
@@ -1234,6 +1244,8 @@ QUERY_FLAGS_REFERENCE = {
     "query_renewal.sql":      "RUN_REFERENCE_RENEWAL",
     "query_invoice_elec.sql": "RUN_REFERENCE_INVOICE_ELEC",
     "query_invoice_gas.sql":  "RUN_REFERENCE_INVOICE_GAS",
+    "query_cheque_kj.sql":    "RUN_REFERENCE_CHEQUE_KJ",
+    "query_cheque_kh.sql":    "RUN_REFERENCE_CHEQUE_KH",
 }
 
 FLAG_ENV_KEYS = QUERY_FLAGS  # alias usato da KrakenDataExtractor._load_flags_from_env
@@ -1250,6 +1262,8 @@ FLOWS_IDENTIFIER_SECONDARY = [
     "query_renewal.sql",
     "query_payment_elec.sql",
     "query_payment_gas.sql",
+    "query_cheque_kj.sql",
+    "query_cheque_kh.sql",
 ]
 
 # Flow reference secondari (estratti dai pagamenti)
@@ -1261,6 +1275,8 @@ FLOWS_REFERENCE_SECONDARY = [
     "query_renewal.sql",
     "query_invoice_elec.sql",
     "query_invoice_gas.sql",
+    "query_cheque_kj.sql",
+    "query_cheque_kh.sql",
 ]
 
 # Query payment con filtro reference
@@ -1281,6 +1297,8 @@ QUERY_LABELS = {
     "query_payment_gas.sql":  "Payment Gas",
     "query_cheque_energie.sql":     "Cheque Energie KJ",
     "query_cheque_energie_kh.sql": "Cheque Energie KH",
+    "query_cheque_kj.sql":    "Cheque Energie KJ",
+    "query_cheque_kh.sql":    "Cheque Energie KH",
 }
 
 # ── Colori & stile ───────────────────────────────────────────────────────────
@@ -1535,9 +1553,9 @@ _QUERY_REPLACEMENTS = {
     "query_invoice_gas.sql": [
         ("document.finalized_at > 'DATETOINSERT'",
          """acc.number in ('LISTA_KRAKEN_ACCOUNT')
-and concat(		
+and concat(
 		case
-			when substring(template_vars_json::json#>>'{meter_info,id}',1,8)='63300000' 
+			when substring(template_vars_json::json#>>'{meter_info,id}',1,8)='63300000'
 			then substring(template_vars_json::json#>>'{meter_info,id}',9,6)::numeric::text
 			else template_vars_json::json#>>'{meter_info,id}'
 		end,
@@ -1787,6 +1805,18 @@ def run_pipeline_identifier(flags, log, on_done, env="INTEGRATION"):
 _PAYMENT_QUERIES = {
     "query_payment_elec.sql": "select * from j_kraken_payments\nwhere concat(supply_point, account_number) in ('LISTA_PRM_E_KRAKEN_ACCOUNT')\nand commodity = 'ELEC'",
     "query_payment_gas.sql":  "select * from j_kraken_payments\nwhere concat(supply_point, account_number) in ('LISTA_PRM_E_KRAKEN_ACCOUNT')\nand commodity = 'GAS'",
+    "query_cheque_kj.sql": (
+        "select account_number as kraken_account, net_amount, created_date as created_at,"
+        " energy_cheque_id, segment"
+        " from j_cheque_energie_registrati"
+        " where account_number in ('LISTA_KRAKEN_ACCOUNT')"
+    ),
+    "query_cheque_kh.sql": (
+        "select supply_point, ledger_type, net_amount, transferred_at, segment,"
+        " reference, credit_id, account_number as kraken_account"
+        " from j_cheque_energie_utilizzati"
+        " where concat(supply_point, account_number) in ('LISTA_PRM_E_KRAKEN_ACCOUNT')"
+    ),
 }
 
 _PAYMENT_QUERIES_REFERENCE = {
@@ -1949,6 +1979,7 @@ def _run_payment_query_gui(hub_conn, kraken_conn, integration_conn, flow, flags,
             # Query payment: inline nello script, eseguite su HUB
             query = _PAYMENT_QUERIES[flow]
             query = query.replace("'LISTA_PRM_E_KRAKEN_ACCOUNT'", lista_prm_kraken)
+            query = query.replace("'LISTA_KRAKEN_ACCOUNT'", lista_kraken)
             exec_conn = hub_conn
 
         cur = exec_conn.cursor()
@@ -3043,12 +3074,14 @@ class KrakenDataExtractor(_AppBase):
         _make_accordion(
             "PRM", MODE_PRM, "_btn",
             [
-                ("Customer",     ["query_customer.sql"]),
-                ("Agreement",    ["query_agreement.sql"]),
-                ("Payment Plan", ["query_pp_elec.sql", "query_pp_gas.sql"]),
-                ("Renewal",      ["query_renewal.sql"]),
-                ("Invoice",      ["query_invoice_elec.sql", "query_invoice_gas.sql"]),
-                ("Payment",      ["query_payment_elec.sql", "query_payment_gas.sql"]),
+                ("Customer",          ["query_customer.sql"]),
+                ("Agreement",         ["query_agreement.sql"]),
+                ("Payment Plan",      ["query_pp_elec.sql", "query_pp_gas.sql"]),
+                ("Renewal",           ["query_renewal.sql"]),
+                ("Invoice",           ["query_invoice_elec.sql", "query_invoice_gas.sql"]),
+                ("Payment",           ["query_payment_elec.sql", "query_payment_gas.sql"]),
+                ("Cheque Energie KJ", ["query_cheque_kj.sql"]),
+                ("Cheque Energie KH", ["query_cheque_kh.sql"]),
             ],
             self._flags, "_flag_labels", default_open=True
         )
@@ -3056,11 +3089,13 @@ class KrakenDataExtractor(_AppBase):
         _make_accordion(
             "Identifier", MODE_IDENTIFIER, "_btn_id",
             [
-                ("Customer",     ["query_customer.sql"]),
-                ("Agreement",    ["query_agreement.sql"]),
-                ("Payment Plan", ["query_pp_elec.sql", "query_pp_gas.sql"]),
-                ("Renewal",      ["query_renewal.sql"]),
-                ("Payment",      ["query_payment_elec.sql", "query_payment_gas.sql"]),
+                ("Customer",          ["query_customer.sql"]),
+                ("Agreement",         ["query_agreement.sql"]),
+                ("Payment Plan",      ["query_pp_elec.sql", "query_pp_gas.sql"]),
+                ("Renewal",           ["query_renewal.sql"]),
+                ("Payment",           ["query_payment_elec.sql", "query_payment_gas.sql"]),
+                ("Cheque Energie KJ", ["query_cheque_kj.sql"]),
+                ("Cheque Energie KH", ["query_cheque_kh.sql"]),
             ],
             self._flags_identifier, "_flag_labels_id", default_open=False
         )
@@ -3068,11 +3103,13 @@ class KrakenDataExtractor(_AppBase):
         _make_accordion(
             "Reference", MODE_REFERENCE, "_btn_ref",
             [
-                ("Customer",     ["query_customer.sql"]),
-                ("Agreement",    ["query_agreement.sql"]),
-                ("Payment Plan", ["query_pp_elec.sql", "query_pp_gas.sql"]),
-                ("Renewal",      ["query_renewal.sql"]),
-                ("Invoice",      ["query_invoice_elec.sql", "query_invoice_gas.sql"]),
+                ("Customer",          ["query_customer.sql"]),
+                ("Agreement",         ["query_agreement.sql"]),
+                ("Payment Plan",      ["query_pp_elec.sql", "query_pp_gas.sql"]),
+                ("Renewal",           ["query_renewal.sql"]),
+                ("Invoice",           ["query_invoice_elec.sql", "query_invoice_gas.sql"]),
+                ("Cheque Energie KJ", ["query_cheque_kj.sql"]),
+                ("Cheque Energie KH", ["query_cheque_kh.sql"]),
             ],
             self._flags_reference, "_flag_labels_ref", default_open=False
         )
@@ -10530,6 +10567,400 @@ class JiraTicketCreator(_AppBase):
         self._enqueue_log(f"[INFO] Template eliminato: {chiave}", "info")
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# UPDATE HUB FILTER
+# ════════════════════════════════════════════════════════════════════════════
+
+UHF_INPUT_FILE = _HERE / "input" / "update hub filter" / "data_input.txt"
+
+
+class UpdateHubFilter(_AppBase):
+
+    def __init__(self, master):
+        super().__init__(master, bg=BG)
+        self._log_queue: queue.Queue = queue.Queue()
+        self._running        = False
+        self._stop_requested = False
+
+        self._build_ui()
+        self._load_input_into_table()
+        self._poll_log()
+
+    def _build_ui(self):
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("UHF.TNotebook",
+                        background=BG, borderwidth=0, tabmargins=[0, 0, 0, 0])
+        style.configure("UHF.TNotebook.Tab",
+                        background=BG_CARD, foreground=TEXT_SEC,
+                        font=("Consolas", 10), padding=[16, 6],
+                        borderwidth=0)
+        style.map("UHF.TNotebook.Tab",
+                  background=[("selected", BG_CARD2)],
+                  foreground=[("selected", TEXT_PRI)])
+
+        nb = ttk.Notebook(self, style="UHF.TNotebook")
+        nb.pack(fill="both", expand=True, padx=24, pady=(12, 0))
+
+        tab_pipeline = Frame(nb, bg=BG)
+        nb.add(tab_pipeline, text="  ▶  Pipeline  ")
+        self._build_pipeline_tab(tab_pipeline)
+
+        tab_input = Frame(nb, bg=BG)
+        nb.add(tab_input, text="  📋  Data Input  ")
+        self._build_input_tab(tab_input)
+
+        self._status_var = tkinter.StringVar(value="Pronto.")
+        Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
+              font=("Consolas", 9), anchor="w", pady=5).pack(fill="x", padx=24, side="bottom")
+        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
+
+    def _build_pipeline_tab(self, parent):
+        body = Frame(parent, bg=BG)
+        body.pack(fill="both", expand=True)
+
+        top = Frame(body, bg=BG_CARD, bd=0, highlightthickness=1,
+                    highlightbackground=BORDER)
+        top.pack(fill="x", pady=(0, 10))
+
+        row = Frame(top, bg=BG_CARD)
+        row.pack(fill="x", padx=14, pady=10)
+
+        Label(row, text="Cluster", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 9), anchor="w").pack(side="left", padx=(0, 8))
+
+        self._cluster_var = tkinter.StringVar()
+        self._cluster_entry = tkinter.Entry(row, textvariable=self._cluster_var,
+                                            bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
+                                            disabledbackground=BG_CARD, disabledforeground=TEXT_SEC,
+                                            font=("Consolas", 10), relief="flat", bd=0,
+                                            highlightthickness=1, highlightbackground=BORDER)
+        self._cluster_entry.pack(side="left", fill="x", expand=True, ipady=5)
+        self._cluster_entry.bind("<FocusIn>",  lambda e: self._cluster_entry.configure(highlightbackground=ACCENT))
+        self._cluster_entry.bind("<FocusOut>", lambda e: self._cluster_entry.configure(highlightbackground=BORDER))
+
+        self._btn = self._make_btn(row, "▶  Avvia", self._start)
+        self._btn.pack(side="right", padx=(12, 0))
+
+        log_frame = Frame(body, bg=BG_CARD, bd=0, highlightthickness=1,
+                          highlightbackground=BORDER)
+        log_frame.pack(fill="both", expand=True)
+        self._build_log_panel(log_frame, on_clear=self._clear_log)
+
+    def _build_input_tab(self, parent):
+        hdr = Frame(parent, bg=BG)
+        hdr.pack(fill="x", padx=16, pady=(12, 0))
+        Label(hdr, text="Data Input  —  PRM / Kraken Account", bg=BG, fg=TEXT_PRI,
+              font=("Consolas", 11, "bold")).pack(side="left")
+        Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(8, 0))
+        Label(parent, text="Ogni riga rappresenta una coppia PRM ; Kraken Account da processare.",
+              bg=BG, fg=TEXT_SEC, font=("Consolas", 9), anchor="w", pady=6).pack(fill="x", padx=16)
+
+        toolbar = Frame(parent, bg=BG)
+        toolbar.pack(fill="x", padx=16, pady=(0, 6))
+        self._make_btn(toolbar, "✏️  Modifica / Aggiungi", self._input_paste_popup,
+                       color=SUCCESS).pack(side="left", padx=(0, 6))
+        self._make_btn(toolbar, "🗑  Svuota righe", self._input_clear_all,
+                       color=ERROR).pack(side="left")
+
+        table_frame = Frame(parent, bg=BG_CARD,
+                            highlightthickness=1, highlightbackground=BORDER)
+        table_frame.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+
+        style = ttk.Style()
+        style.configure("UHF.Treeview",
+                        background=BG_CARD, foreground=TEXT_PRI,
+                        fieldbackground=BG_CARD, rowheight=26,
+                        font=("Consolas", 10), borderwidth=0)
+        style.configure("UHF.Treeview.Heading",
+                        background=BG_CARD2, foreground=ACCENT,
+                        font=("Consolas", 9, "bold"), relief="flat")
+        style.map("UHF.Treeview",
+                  background=[("selected", ACCENT2)],
+                  foreground=[("selected", TEXT_PRI)])
+
+        cols = ("prm", "kraken")
+        self._input_tree = ttk.Treeview(table_frame, columns=cols,
+                                        show="headings", style="UHF.Treeview",
+                                        selectmode="browse")
+        self._input_tree.heading("prm",    text="PRM")
+        self._input_tree.heading("kraken", text="Kraken Account")
+        self._input_tree.column("prm",    width=260, minwidth=120, anchor="w")
+        self._input_tree.column("kraken", width=260, minwidth=120, anchor="w")
+
+        vsb = ttk.Scrollbar(table_frame, orient="vertical",
+                            command=self._input_tree.yview,
+                            style="Dark.Vertical.TScrollbar")
+        def _scroll(f, l):
+            if float(f) <= 0.0 and float(l) >= 1.0:
+                if vsb.winfo_ismapped():
+                    vsb.after(1, vsb.pack_forget)
+            else:
+                if not vsb.winfo_ismapped():
+                    vsb.after(1, lambda: vsb.pack(side="right", fill="y",
+                                                   before=self._input_tree))
+            vsb.set(f, l)
+        vsb.pack(side="right", fill="y")
+        self._input_tree.configure(yscrollcommand=_scroll)
+        self._input_tree.pack(fill="both", expand=True)
+        self._input_tree.bind("<Double-1>", self._input_edit_cell)
+
+        footer = Frame(parent, bg=BG)
+        footer.pack(fill="x", padx=16, pady=(0, 4))
+        self._input_count_var = tkinter.StringVar(value="")
+        Label(footer, textvariable=self._input_count_var,
+              bg=BG, fg=TEXT_SEC, font=("Consolas", 9)).pack(side="left")
+
+    # ── Input CRUD ────────────────────────────────────────────────────────
+
+    def _load_input_into_table(self):
+        if not hasattr(self, "_input_tree"):
+            return
+        for row in self._input_tree.get_children():
+            self._input_tree.delete(row)
+        if not UHF_INPUT_FILE.exists():
+            self._input_count_var.set("File non trovato — verrà creato al salvataggio.")
+            return
+        lines = UHF_INPUT_FILE.read_text(encoding="utf-8").strip().splitlines()
+        count = 0
+        for line in lines:
+            line = line.strip()
+            if not line or line.lower().startswith("prm"):
+                continue
+            parts = line.split(";")
+            if len(parts) == 2:
+                self._input_tree.insert("", "end", values=(parts[0].strip(), parts[1].strip()))
+                count += 1
+            else:
+                self._input_tree.insert("", "end", values=(line, ""))
+        self._input_count_var.set(f"{count} righe caricate.")
+
+    def _save_input(self):
+        rows = []
+        for iid in self._input_tree.get_children():
+            vals = self._input_tree.item(iid, "values")
+            prm    = vals[0].strip() if len(vals) > 0 else ""
+            kraken = vals[1].strip() if len(vals) > 1 else ""
+            if prm or kraken:
+                rows.append(f"{prm};{kraken}")
+        try:
+            UHF_INPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            UHF_INPUT_FILE.write_text("\n".join(rows) + "\n" if rows else "", encoding="utf-8")
+            self._status_var.set(f"✓ data_input.txt salvato ({len(rows)} righe).")
+            self._update_input_count()
+        except Exception as e:
+            messagebox.showerror("Errore salvataggio", str(e))
+
+    def _update_input_count(self):
+        n = len(self._input_tree.get_children())
+        self._input_count_var.set(f"{n} righe.")
+
+    def _input_paste_popup(self):
+        self._paste_popup(
+            title="Modifica / Aggiungi dati",
+            subtitle=("Modifica, aggiungi o cancella righe. Formato: PRM;KrakenAccount\n"
+                      "Le righe non valide verranno evidenziate in arancione."),
+            tree=self._input_tree, count_var=self._input_count_var,
+            empty_warning="⚠  Nessuna riga trovata.",
+            count_label_fn=lambda n: f"{n} righe.",
+            save_fn=self._save_input,
+            two_column=True, W=560, H=460,
+        )
+
+    def _input_clear_all(self):
+        if not self._input_tree.get_children():
+            return
+        if messagebox.askyesno("Svuota righe", "Sei sicuro di voler rimuovere tutte le righe?"):
+            self._input_tree.delete(*self._input_tree.get_children())
+            self._update_input_count()
+            self._save_input()
+
+    def _input_edit_cell(self, event):
+        region = self._input_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        col_id = self._input_tree.identify_column(event.x)
+        col = "prm" if col_id == "#1" else "kraken"
+        iid = self._input_tree.identify_row(event.y)
+        if not iid:
+            return
+        col_index = 0 if col == "prm" else 1
+        bbox = self._input_tree.bbox(iid, col)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+        current_val = self._input_tree.item(iid, "values")
+        val = current_val[col_index] if current_val else ""
+        var = StringVar(value=val)
+        entry = tkinter.Entry(self._input_tree, textvariable=var,
+                              bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
+                              font=("Consolas", 10), relief="flat", bd=2,
+                              highlightthickness=1, highlightbackground=ACCENT)
+        entry.place(x=x, y=y, width=w, height=h)
+        entry.focus_set()
+        entry.select_range(0, "end")
+
+        def _commit(e=None):
+            new_val = var.get()
+            vals = list(self._input_tree.item(iid, "values"))
+            while len(vals) < 2:
+                vals.append("")
+            vals[col_index] = new_val
+            self._input_tree.item(iid, values=tuple(vals))
+            entry.destroy()
+            self._save_input()
+
+        entry.bind("<Return>",  _commit)
+        entry.bind("<FocusOut>", _commit)
+        entry.bind("<Escape>",  lambda e: entry.destroy())
+
+    def _on_done(self, success: bool):
+        self._running = False
+        self._stop_requested = False
+        self._cluster_var.set("")
+        self._cluster_entry.configure(state="normal")
+        color = SUCCESS if success else ERROR
+        self._status_var.set("✓ Completato." if success else "✗ Errore.")
+        self._btn.configure(fg=color, cursor="hand2")
+        self.after(3000, lambda: self._btn.configure(fg=ACCENT))
+
+    def _clear_log(self):
+        self._log_box.configure(state="normal")
+        self._log_box.delete("1.0", "end")
+        self._log_box.configure(state="disabled")
+
+    # ── Pipeline ──────────────────────────────────────────────────────────
+
+    def _start(self):
+        if self._running:
+            return
+        if not self._cluster_var.get().strip():
+            self._enqueue_log("[ERRORE] Campo 'Cluster' obbligatorio — inserisci un valore prima di avviare.", "error")
+            return
+        pairs = [
+            (self._input_tree.item(iid, "values")[0].strip(),
+             self._input_tree.item(iid, "values")[1].strip())
+            for iid in self._input_tree.get_children()
+            if self._input_tree.item(iid, "values")
+        ]
+        if not pairs:
+            self._enqueue_log("[ERRORE] Nessuna coppia PRM / Kraken Account nel Data Input.", "error")
+            return
+        self._running = True
+        self._stop_requested = False
+        self._btn.configure(fg=TEXT_SEC, cursor="arrow")
+        self._cluster_entry.configure(state="disabled", highlightbackground=BORDER)
+        self._status_var.set("In esecuzione ...")
+        cluster = self._cluster_var.get().strip()
+        threading.Thread(target=self._run, args=(cluster, pairs), daemon=True).start()
+
+    def _run(self, cluster: str, pairs: list):
+        from datetime import datetime
+
+        _reload_env()
+        self._run_ts = datetime.now().astimezone()
+        filename = f"{cluster} - {self._run_ts.strftime('%Y/%m/%d')}"
+
+        try:
+            self._enqueue_log("[INFO] Connessione HUB ...", "info")
+            conn = get_hub_connection()
+            self._enqueue_log("[OK] Connessione HUB attiva ✓", "ok")
+
+            cur = conn.cursor()
+
+            # 1. Recupero commodity da agreement
+            self._enqueue_log(f"[INFO] Recupero commodity da agreement per {len(pairs)} coppie ...", "info")
+            placeholders = ", ".join(["(%s, %s)"] * len(pairs))
+            params = [v for pair in pairs for v in pair]
+            cur.execute(
+                f"""
+                SELECT DISTINCT prm_pce, number,
+                    CASE sparte WHEN '01' THEN 'ELEC' WHEN '02' THEN 'GAS' ELSE sparte END
+                FROM public.agreement
+                WHERE (prm_pce, number) IN ({placeholders})
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+            found_pairs = {(r[0], r[1]) for r in rows}
+            not_found = [(p, k) for p, k in pairs if (p, k) not in found_pairs]
+            self._enqueue_log(f"[OK] Commodity trovata per {len(found_pairs)}/{len(pairs)} coppie.", "ok")
+            if not_found:
+                self._enqueue_log(f"[WARN] {len(not_found)} coppia/e senza corrispondenza in agreement:", "warn")
+                for p, k in not_found:
+                    self._enqueue_log(f"[WARN]   • {p} / {k}", "warn")
+
+            # 2. Truncate e populate z_dc_filter_import
+            self._enqueue_log("[INFO] Popolamento z_dc_filter_import ...", "info")
+            cur.execute("TRUNCATE TABLE public.z_dc_filter_import;")
+            cur.executemany(
+                """
+                INSERT INTO public.z_dc_filter_import (supply_code, kraken_account, commodity)
+                VALUES (%s, %s, %s)
+                """,
+                rows,
+            )
+            conn.commit()
+            self._enqueue_log(f"[OK] {len(rows)} righe inserite in z_dc_filter_import.", "ok")
+
+            # 3. Conteggio unico: mancanti in sap_filter_contract + presenti in on_hold
+            self._enqueue_log("[INFO] Verifica record su sap_filter_contract e on_hold ...", "info")
+            total_count = len(rows)
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE sfc.supply_code IS NULL AND oh.supply_code IS NULL) AS da_aggiungere,
+                    COUNT(oh.supply_code)                                                       AS on_hold_count,
+                    COUNT(sfc.supply_code)                                                      AS already_present
+                FROM public.z_dc_filter_import fi
+                LEFT JOIN public.sap_filter_contract sfc
+                    ON fi.supply_code = sfc.supply_code AND fi.kraken_account = sfc.kraken_account
+                LEFT JOIN public.sap_filter_contract_on_hold oh
+                    ON fi.supply_code = oh.supply_code AND fi.kraken_account = oh.kraken_account
+                """
+            )
+            missing_count, on_hold_count, already_present = cur.fetchone()
+            for line in [
+                "",
+                f"  ┌─────────────────────┬───────┐",
+                f"  │ Da aggiungere       │ {missing_count:>5} │",
+                f"  │ In on hold          │ {on_hold_count:>5} │",
+                f"  │ Già presenti        │ {already_present:>5} │",
+                f"  ├─────────────────────┼───────┤",
+                f"  │ Totale              │ {total_count:>5} │",
+                f"  └─────────────────────┴───────┘",
+                "",
+            ]:
+                self._log_queue.put((line, "info"))
+
+            if missing_count == 0:
+                self._enqueue_log("[WARN] Nessun record da aggiungere — flusso interrotto.", "warn")
+                cur.close()
+                conn.close()
+                self.after(0, self._on_done, True)
+                return
+
+            # 4. INSERT sap_filter_contract_batch (disabilitato temporaneamente)
+            # cur.execute(
+            #     """
+            #     INSERT INTO public.sap_filter_contract_batch
+            #         (end_time, filename, message, result, start_time, uuid)
+            #     VALUES (%s, %s, NULL, 'OK', %s, NULL)
+            #     """,
+            #     (self._run_ts, filename, self._run_ts),
+            # )
+            # conn.commit()
+            # self._enqueue_log("[OK] Batch inserito correttamente.", "ok")
+
+            cur.close()
+            conn.close()
+            self.after(0, self._on_done, True)
+
+        except Exception as e:
+            self._enqueue_log(f"[ERRORE] {e}", "error")
+            self.after(0, self._on_done, False)
+
+
 _APPS = [
     {
         "key":     "hubconsole",
@@ -10635,6 +11066,14 @@ _APPS = [
         "size":    (960, 640),
         "class":   None,
     },
+    {
+        "key":     "uhfilter",
+        "icon":    "🔁",
+        "label":   "Update Hub Filter",
+        "minsize": (820, 560),
+        "size":    (960, 660),
+        "class":   None,
+    },
 ]
 
 def _apply_dark_titlebar(hwnd, bg_hex: str = "#0f1117"):
@@ -10681,6 +11120,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         _APPS[10]["class"] = JiraTicketCreator
         _APPS[11]["class"] = CsvBlankHeaderRemover
         _APPS[12]["class"] = InvoiceWriter
+        _APPS[13]["class"] = UpdateHubFilter
 
         # Impedisce sleep, screensaver e spegnimento display
         # finché il tool è aperto (Windows only, silenzioso su altri OS)
@@ -11460,7 +11900,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         tkinter.Frame(sb, bg=_SB_BORDER, height=1).pack(fill="x")
 
         _SB_GROUPS = [
-            ("db",   "🗄", "DATABASE", ["hubconsole", "hub", "kraken", "analysis", "delta", "bonifica"]),
+            ("db",   "🗄", "DATABASE", ["hubconsole", "hub", "kraken", "analysis", "delta", "bonifica", "uhfilter"]),
             ("file", "📁", "FILE",     ["cleaner", "mover", "zipper", "ppfilter", "csvremover", "invoicewriter"]),
             ("jira", "🎫", "JIRA",     ["jira"]),
         ]
