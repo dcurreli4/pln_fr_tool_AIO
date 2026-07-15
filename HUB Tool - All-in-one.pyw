@@ -2959,7 +2959,8 @@ class KrakenDataExtractor(_AppBase):
                         borderwidth=0)
         style.map("Dark.TNotebook.Tab",
                   background=[("selected", BG_CARD2)],
-                  foreground=[("selected", TEXT_PRI)])
+                  foreground=[("selected", TEXT_PRI)],
+                  padding=[("selected", [16, 8]), ("!selected", [16, 6])])
         style.configure("Mode.TNotebook",
                         background=BG_CARD2, borderwidth=0, tabmargins=[0, 0, 0, 0])
         style.configure("Mode.TNotebook.Tab",
@@ -10616,7 +10617,8 @@ class HubFilterUpdater(_AppBase):
                         borderwidth=0)
         style.map("UHF.TNotebook.Tab",
                   background=[("selected", BG_CARD2)],
-                  foreground=[("selected", TEXT_PRI)])
+                  foreground=[("selected", TEXT_PRI)],
+                  padding=[("selected", [16, 8]), ("!selected", [16, 6])])
 
         nb = ttk.Notebook(self, style="UHF.TNotebook")
         nb.pack(fill="both", expand=True, padx=24, pady=(12, 0))
