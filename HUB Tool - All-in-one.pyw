@@ -1725,6 +1725,13 @@ def _run_identifier_query_gui(hub_conn, kraken_conn, integration_conn, flow, fla
         rows = cur.fetchall(); cur.close()
 
         rows = normalize_timestamps(rows)
+
+        if flow in ("query_invoice_elec.sql", "query_invoice_gas.sql"):
+            idx_drop = [i for i, c in enumerate(columns) if c == "created_at"]
+            if idx_drop:
+                columns = [c for i, c in enumerate(columns) if i not in idx_drop]
+                rows = [tuple(v for i, v in enumerate(row) if i not in idx_drop) for row in rows]
+
         _commit_rows(integration_conn, table, columns, rows, log)
         return columns, rows
 
@@ -1998,6 +2005,12 @@ def _run_payment_query_gui(hub_conn, kraken_conn, integration_conn, flow, flags,
 
         if flow == "query_agreement.sql":
             columns = ["pod" if c == "supply_point" else "update_at" if c == "updated_at" else c for c in columns]
+
+        if flow in ("query_invoice_elec.sql", "query_invoice_gas.sql"):
+            idx_drop = [i for i, c in enumerate(columns) if c == "created_at"]
+            if idx_drop:
+                columns = [c for i, c in enumerate(columns) if i not in idx_drop]
+                rows = [tuple(v for i, v in enumerate(row) if i not in idx_drop) for row in rows]
 
         if flow == "query_payment_elec.sql":
             columns = ["prm_id" if c == "supply_point" else c for c in columns]
