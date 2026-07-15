@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.4.6"
+VERSION_LAUNCHER = "1.4.7"
 
 
 _REQUIRED = {
@@ -2165,7 +2165,7 @@ _ADE_UI_ROWS = [
     ("Cheque Energie KH", ["query_cheque_energie_kh.sql"]),
 ]
 
-# Mapping hname per Analysis Data Extractor — estende _HUB_META_QUERIES
+# Mapping hname per Kraken Full Data Extractor — estende _HUB_META_QUERIES
 # aggiungendo i payment con query dedicate (SPLUS)
 _ADE_HUB_META_QUERIES = {
     **_HUB_META_QUERIES,
@@ -2265,7 +2265,7 @@ def _ade_get_kraken_connection():
 
 def run_ade_pipeline(flags, log, on_done, app=None):
     """
-    Pipeline Analysis Data Extractor:
+    Pipeline Kraken Full Data Extractor:
     - Sorgente: Kraken PROD
     - Destinazione: HUB PROD (connessione diretta, nessun tunnel SSH)
     - Per ogni flow selezionato: TRUNCATE + query Kraken + bulk insert su HUB
@@ -2515,7 +2515,7 @@ def run_ade_pipeline(flags, log, on_done, app=None):
         on_done(success=False, elapsed={})
 
 
-class AnalysisDataExtractor(_AppBase):
+class KrakenFullDataExtractor(_AppBase):
 
     def __init__(self, master):
         super().__init__(master, bg=BG)
@@ -10590,10 +10590,10 @@ class JiraTicketCreator(_AppBase):
 # UPDATE HUB FILTER
 # ════════════════════════════════════════════════════════════════════════════
 
-UHF_INPUT_FILE = _HERE / "input" / "update hub filter" / "data_input.txt"
+UHF_INPUT_FILE = _HERE / "input" / "hub filter updater" / "data_input.txt"
 
 
-class UpdateHubFilter(_AppBase):
+class HubFilterUpdater(_AppBase):
 
     def __init__(self, master):
         super().__init__(master, bg=BG)
@@ -10959,17 +10959,56 @@ class UpdateHubFilter(_AppBase):
                 self.after(0, self._on_done, True)
                 return
 
-            # 4. INSERT sap_filter_contract_batch (disabilitato temporaneamente)
-            # cur.execute(
-            #     """
-            #     INSERT INTO public.sap_filter_contract_batch
-            #         (end_time, filename, message, result, start_time, uuid)
-            #     VALUES (%s, %s, NULL, 'OK', %s, NULL)
-            #     """,
-            #     (self._run_ts, filename, self._run_ts),
-            # )
-            # conn.commit()
-            # self._enqueue_log("[OK] Batch inserito correttamente.", "ok")
+            # 4. INSERT sap_filter_contract_batch
+            cur.execute(
+                """
+                INSERT INTO public.sap_filter_contract_batch
+                    (end_time, filename, message, result, start_time, uuid)
+                VALUES (%s, %s, NULL, 'OK', %s, NULL)
+                RETURNING id
+                """,
+                (self._run_ts, filename, self._run_ts),
+            )
+            self._batch_id = cur.fetchone()[0]
+            conn.commit()
+            self._enqueue_log(f"[OK] Batch creato con ID: {self._batch_id}", "ok")
+
+            # 5. INSERT sap_filter_contract dai record da aggiungere
+            self._enqueue_log("[INFO] Inserimento record in sap_filter_contract ...", "info")
+            cur.execute(
+                """
+                INSERT INTO sap_filter_contract
+                    (commodity, contract, execute_time_stamp, kraken_account,
+                     sap_list_supply_csv, supply_code, batch_id)
+                SELECT
+                    fi.commodity,
+                    fi.contract,
+                    %s,
+                    fi.kraken_account,
+                    %s,
+                    fi.supply_code,
+                    %s
+                FROM z_dc_filter_import fi
+                LEFT JOIN sap_filter_contract sfc
+                    ON fi.supply_code = sfc.supply_code
+                   AND fi.kraken_account = sfc.kraken_account
+                WHERE sfc.supply_code IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM sap_filter_contract_on_hold oh
+                    WHERE oh.supply_code = fi.supply_code
+                      AND oh.kraken_account = fi.kraken_account
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM sap_filter_contract sfc2
+                    WHERE sfc2.supply_code = fi.supply_code
+                      AND sfc2.kraken_account = fi.kraken_account
+                )
+                """,
+                (self._run_ts, cluster, self._batch_id),
+            )
+            inserted = cur.rowcount
+            conn.commit()
+            self._enqueue_log(f"[OK] {inserted} record inseriti in sap_filter_contract.", "ok")
 
             cur.close()
             conn.close()
@@ -11008,7 +11047,7 @@ _APPS = [
     {
         "key":     "analysis",
         "icon":    "🔬",
-        "label":   "Analysis Data Extractor",
+        "label":   "Kraken Full Data Extractor",
         "minsize": (820, 560),
         "size":    (960, 660),
         "class":   None,
@@ -11086,9 +11125,9 @@ _APPS = [
         "class":   None,
     },
     {
-        "key":     "uhfilter",
+        "key":     "hfupdater",
         "icon":    "🔁",
-        "label":   "Update Hub Filter",
+        "label":   "Hub Filter Updater",
         "minsize": (820, 560),
         "size":    (960, 660),
         "class":   None,
@@ -11129,7 +11168,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         _APPS[0]["class"] = HubConsole
         _APPS[1]["class"] = HubProdSync
         _APPS[2]["class"] = KrakenDataExtractor
-        _APPS[3]["class"] = AnalysisDataExtractor
+        _APPS[3]["class"] = KrakenFullDataExtractor
         _APPS[4]["class"] = DeltaRecovery
         _APPS[5]["class"] = BonificaProd
         _APPS[6]["class"] = FolderCleaner
@@ -11139,7 +11178,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         _APPS[10]["class"] = JiraTicketCreator
         _APPS[11]["class"] = CsvBlankHeaderRemover
         _APPS[12]["class"] = InvoiceWriter
-        _APPS[13]["class"] = UpdateHubFilter
+        _APPS[13]["class"] = HubFilterUpdater
 
         # Impedisce sleep, screensaver e spegnimento display
         # finché il tool è aperto (Windows only, silenzioso su altri OS)
@@ -11668,7 +11707,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
                  "Identifier: input/kraken data extractor/data_input_identifier.txt\n"
                  "Reference: input/kraken data extractor/data_input_reference.txt"),
             ]),
-            ("🔬  Analysis Data Extractor", [
+            ("🔬  Kraken Full Data Extractor", [
                 ("Cosa fa",
                  "Estrae dati full (senza filtri) da Kraken PROD e li carica direttamente su HUB PROD "
                  "nelle tabelle j_kraken_*. Per ogni flow: TRUNCATE + estrazione Kraken + bulk insert "
@@ -11881,7 +11920,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         self._refresh_env_buttons(self._current_env)
 
         # Mostra il selettore Recette/Integration solo nelle app DB
-        # che lo utilizzano (non in Analysis Data Extractor)
+        # che lo utilizzano (non in Kraken Full Data Extractor)
         _SHOW_ENV_TOGGLE = {"hub", "kraken", "delta", "hubconsole", "bonifica"}
         if key in _SHOW_ENV_TOGGLE:
             self._seg_canvas.pack(side="left", padx=(0, 8))
@@ -11919,7 +11958,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         tkinter.Frame(sb, bg=_SB_BORDER, height=1).pack(fill="x")
 
         _SB_GROUPS = [
-            ("db",   "🗄", "DATABASE", ["hubconsole", "hub", "kraken", "analysis", "delta", "bonifica", "uhfilter"]),
+            ("db",   "🗄", "DATABASE", ["hubconsole", "hub", "kraken", "analysis", "delta", "bonifica", "hfupdater"]),
             ("file", "📁", "FILE",     ["cleaner", "mover", "zipper", "ppfilter", "csvremover", "invoicewriter"]),
             ("jira", "🎫", "JIRA",     ["jira"]),
         ]
