@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.4.9"
+VERSION_LAUNCHER = "1.4.10"
 
 
 _REQUIRED = {
@@ -2890,6 +2890,11 @@ class HubConsole(_AppBase):
         try:
             tunnel, conn = self._get_int_conn()
             cur = conn.cursor()
+            cur.execute("SELECT delete_renewal_before_payment_plans()")
+            deleted = cur.fetchone()[0]
+            conn.commit()
+            self._enqueue_log(
+                f"[OK] Rimossi {deleted} rinnovi con data precedente al piano di pagamento", "ok")
             cur.execute(
                 "UPDATE hub_config_db SET hvalue = 'Y' WHERE hkey = %s",
                 (_HC_RUN_KEY,))
