@@ -11266,6 +11266,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         self._hdr_version.configure(text=f"v{VERSION_LAUNCHER}")
 
         self._select(_APPS[0]["key"])
+        self._schedule_update_check()
 
         self.update_idletasks()
         try:
@@ -11281,6 +11282,21 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         self.geometry(f"{W}x{h}+{x}+{y}")
 
     # ── Header unificato ──────────────────────────────────────────────────
+
+    def _schedule_update_check(self):
+        def _check():
+            threading.Thread(target=self._bg_update_check, daemon=True).start()
+            self.after(30 * 60 * 1000, _check)
+        self.after(30 * 60 * 1000, _check)
+
+    def _bg_update_check(self):
+        _check_update_available()
+        if _UPDATE_INFO:
+            self.after(0, self._show_update_badge)
+
+    def _show_update_badge(self):
+        self._update_badge.configure(text=f"↑ v{_UPDATE_INFO[0]}")
+        self._update_badge.pack(side="left", padx=(0, 8))
 
     def _build_header(self, parent):
         hdr = tkinter.Frame(parent, bg=BG, pady=12)
@@ -11300,6 +11316,16 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         self._hdr_version = tkinter.Label(right, text="", bg=BG, fg=TEXT_SEC,
                                           font=("Consolas", 9), padx=12)
         # versione spostata in basso
+
+        _badge_text = f"↑ v{_UPDATE_INFO[0]}" if _UPDATE_INFO else ""
+        self._update_badge = tkinter.Label(
+            right, text=_badge_text, bg=ACCENT, fg="#ffffff",
+            font=("Consolas", 9, "bold"), padx=10, pady=3, cursor="hand2")
+        self._update_badge.bind("<Button-1>", lambda e: _show_update_dialog(self))
+        self._update_badge.bind("<Enter>",    lambda e: self._update_badge.configure(bg="#3a7ee8"))
+        self._update_badge.bind("<Leave>",    lambda e: self._update_badge.configure(bg=ACCENT))
+        if _UPDATE_INFO:
+            self._update_badge.pack(side="left", padx=(0, 8))
 
         self._info_btn = tkinter.Label(self)  # placeholder per compatibilità
         self._gear_btn = tkinter.Label(self)  # placeholder per compatibilità
