@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.4.8"
+VERSION_LAUNCHER = "1.4.9"
 
 
 _REQUIRED = {
@@ -8931,6 +8931,8 @@ def _jira_detect_file_type(filename):
         return "Piani"
     if n.startswith("KE_") or n.startswith("KG_"):
         return "Pagamenti"
+    if n.startswith("CE_KH_") or n.startswith("CE_KJ_"):
+        return "Pagamenti"
     return None
 
 
@@ -9018,6 +9020,13 @@ def _jira_build_cfg(key, zip_paths, jira_env="PROD"):
     import zipfile as _zf, os as _os
     env_code = "CE1" if jira_env == "CHOPIN" else "PE1"
     lines = ["TICKET_JIRA;ZIP_FILE;TARGET_DIR"]
+
+    names = [_os.path.basename(p) for p in zip_paths]
+    seen = set()
+    for n in names:
+        if n in seen:
+            return None, f"ZIP duplicato: '{n}' è presente più di una volta."
+        seen.add(n)
 
     for zip_path in zip_paths:
         zip_name = _os.path.basename(zip_path)
