@@ -5997,9 +5997,29 @@ def pp_run_pipeline(cfg_data, log_fn, on_done):
                     filter_set.add(s)
         log_fn(f"[INFO] Filtro caricato: {len(filter_set)} ID", "info")
 
-        _PAT = _re.compile(r'^K[EG]_PP_[MCRU]_.*\.csv$', _re.IGNORECASE)
-        csv_files = sorted(f for f in input_folder.glob("K[EG]_PP_*.csv")
-                           if _PAT.match(f.name))
+        # In modalità agreement_id_plan_type estrai i plan type distinti dal filtro
+        # per skippare i file il cui plan type non è nel set
+        plan_type_whitelist = None
+        if cfg_data["filter_key"] == "agreement_id_plan_type":
+            plan_type_whitelist = {
+                entry.split(";")[1].upper()
+                for entry in filter_set
+                if ";" in entry
+            }
+            if plan_type_whitelist:
+                log_fn(f"[INFO] Plan type nel filtro: {', '.join(sorted(plan_type_whitelist))}", "info")
+
+        _PAT = _re.compile(r'^K[EG]_PP_([MCRU])_.*\.csv$', _re.IGNORECASE)
+        csv_files_all = sorted(f for f in input_folder.glob("K[EG]_PP_*.csv")
+                               if _PAT.match(f.name))
+        if plan_type_whitelist:
+            csv_files = [f for f in csv_files_all
+                         if (m := _PAT.match(f.name)) and m.group(1).upper() in plan_type_whitelist]
+            skipped = len(csv_files_all) - len(csv_files)
+            if skipped:
+                log_fn(f"[INFO] File saltati per plan type non nel filtro: {skipped}", "info")
+        else:
+            csv_files = csv_files_all
         if not csv_files:
             log_fn("[ERRORE] Nessun file CSV trovato.", "error")
             on_done(success=False); return
