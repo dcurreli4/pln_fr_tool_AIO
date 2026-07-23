@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.4.11"
+VERSION_LAUNCHER = "1.4.12"
 
 
 _REQUIRED = {
@@ -2171,7 +2171,7 @@ _ADE_HUB_META_QUERIES = {
     **_HUB_META_QUERIES,
     "query_payment_elec.sql": "QUERY_PAYMENTS_ELEC_SPLUS",
     "query_payment_gas.sql":  "QUERY_PAYMENTS_GAS_SPLUS",
-    "query_cheque_energie.sql":     "QUERY_CHEQUE_ENERGIE_REGISTER",
+    "query_cheque_energie.sql":     "CHEQUE_ENERGIE_REGISTER",
     "query_cheque_energie_kh.sql": "CHEQUE_ENERGIE_USE",
 }
 
