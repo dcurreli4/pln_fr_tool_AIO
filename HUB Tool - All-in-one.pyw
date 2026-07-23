@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.5.0"
+VERSION_LAUNCHER = "1.5.1"
 
 
 _REQUIRED = {
@@ -11590,6 +11590,68 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
     def _open_about(self):
         self._select_panel("about")
 
+    def _open_changelog(self):
+        self._select_panel("changelog")
+
+    def _build_changelog_panel(self, parent):
+        import re as _re
+        _CL_FILE = _HERE / "CHANGELOG.md"
+        canvas, inner = self._make_scrollable_canvas(parent)
+
+        hdr = tkinter.Frame(inner, bg=BG)
+        hdr.pack(fill="x", padx=40, pady=(30, 0))
+        tkinter.Label(hdr, text="Storico delle versioni rilasciate", bg=BG, fg=TEXT_PRI,
+                      font=("Consolas", 16, "bold"), anchor="w").pack(anchor="w")
+        tkinter.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=40, pady=(16, 0))
+
+        body = tkinter.Frame(inner, bg=BG)
+        body.pack(fill="both", expand=True, padx=40, pady=(16, 30))
+
+        if not _CL_FILE.exists():
+            tkinter.Label(body, text="CHANGELOG.md non trovato.",
+                          bg=BG, fg=TEXT_SEC, font=("Consolas", 10)).pack(anchor="w")
+            return
+
+        def _insert_rich(widget, text, base_tag):
+            """Inserisce testo in un Text widget interpretando **bold**."""
+            parts = _re.split(r'(\*\*[^*]+\*\*)', text)
+            for part in parts:
+                if part.startswith("**") and part.endswith("**"):
+                    widget.insert("end", part[2:-2], (base_tag, "bold"))
+                else:
+                    widget.insert("end", part, base_tag)
+
+        def _text_line(text, fg, font_normal, font_bold, pady=1):
+            t = tkinter.Text(body, bg=BG, fg=fg,
+                             font=font_normal, bd=0, highlightthickness=0,
+                             state="normal", wrap="word", cursor="arrow",
+                             height=1, padx=0, pady=pady)
+            t.tag_configure("normal", font=font_normal, foreground=fg)
+            t.tag_configure("bold",   font=font_bold,   foreground=fg)
+            _insert_rich(t, text, "normal")
+            t.configure(state="disabled")
+            t.pack(fill="x", anchor="w")
+            # Adatta altezza al contenuto dopo il pack
+            t.update_idletasks()
+            lines = int(t.index("end-1c").split(".")[0])
+            t.configure(height=lines)
+
+        for line in _CL_FILE.read_text(encoding="utf-8").splitlines():
+            if line.startswith("### "):
+                tkinter.Label(body, text=line[4:].strip(),
+                              bg=BG, fg=TEXT_PRI,
+                              font=("Consolas", 11, "bold"), anchor="w").pack(
+                              anchor="w", pady=(16, 2))
+                tkinter.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 6))
+            elif line.startswith("#"):
+                pass
+            elif line.strip().startswith("- "):
+                _text_line(line.strip(),
+                           fg=TEXT_SEC,
+                           font_normal=("Consolas", 9),
+                           font_bold=("Consolas", 9, "bold"),
+                           pady=1)
+
     def _select_panel(self, key):
         """Mostra about o settings nel frame principale senza popup."""
         if self._current_key == key:
@@ -11621,6 +11683,8 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
             frame = tkinter.Frame(self._content, bg=BG)
             if key == "settings":
                 self._build_settings_panel(frame)
+            elif key == "changelog":
+                self._build_changelog_panel(frame)
             else:
                 self._build_about_panel(frame)
             frame.pack(fill="both", expand=True)
@@ -11789,8 +11853,18 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         hdr.pack(fill="x", padx=40, pady=(30, 0))
         tkinter.Label(hdr, text="HUB Tool - All-in-one", bg=BG, fg=TEXT_PRI,
                       font=("Consolas", 16, "bold"), anchor="w").pack(anchor="w")
-        tkinter.Label(hdr, text=f"v{VERSION_LAUNCHER}  |  Fatto a mano S.r.l.",
-                      bg=BG, fg=TEXT_SEC, font=("Consolas", 9), anchor="w").pack(anchor="w", pady=(2, 0))
+
+        sub_row = tkinter.Frame(hdr, bg=BG)
+        sub_row.pack(anchor="w", pady=(2, 0))
+        tkinter.Label(sub_row, text=f"v{VERSION_LAUNCHER}  |  Fatto a mano S.r.l.",
+                      bg=BG, fg=TEXT_SEC, font=("Consolas", 9)).pack(side="left")
+        cl_btn = tkinter.Label(sub_row, text="📋 Changelog", bg=BG, fg=ACCENT,
+                               font=("Consolas", 9), cursor="hand2", padx=10)
+        cl_btn.pack(side="left")
+        cl_btn.bind("<Button-1>", lambda e: self._select_panel("changelog"))
+        cl_btn.bind("<Enter>",    lambda e: cl_btn.configure(fg=TEXT_PRI))
+        cl_btn.bind("<Leave>",    lambda e: cl_btn.configure(fg=ACCENT))
+
         tkinter.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=40, pady=(16, 0))
 
         APPS_SECTIONS = [
@@ -12026,8 +12100,8 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         self._seg_animate()
 
     def _update_header(self, key):
-        if key in ("about", "settings"):
-            titles = {"about": "About", "settings": "Impostazioni"}
+        if key in ("about", "settings", "changelog"):
+            titles = {"about": "About", "settings": "Impostazioni", "changelog": "Changelog"}
             self._hdr_title.configure(text=titles[key])
         else:
             app_cfg = next(a for a in _APPS if a["key"] == key)
@@ -12050,6 +12124,71 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
             self._jseg_canvas.pack_forget()
 
     # ── Sidebar ───────────────────────────────────────────────────────────
+
+    def _show_updated_changelog_popup(self, _updated_version):
+        import re as _re
+        popup = tkinter.Toplevel(self)
+        popup.title("Aggiornamento completato")
+        popup.configure(bg=BG)
+        popup.resizable(False, False)
+        popup.grab_set()
+        W, H = 560, 460
+        x = self.winfo_x() + (self.winfo_width()  - W) // 2
+        y = self.winfo_y() + (self.winfo_height() - H) // 2
+        popup.geometry(f"{W}x{H}+{x}+{y}")
+
+        outer = tkinter.Frame(popup, bg=BORDER, bd=1)
+        outer.pack(fill="both", expand=True, padx=1, pady=1)
+        inner = tkinter.Frame(outer, bg=BG)
+        inner.pack(fill="both", expand=True, padx=1, pady=1)
+
+        tkinter.Label(inner, text="Aggiornamento completato",
+                      bg=BG, fg=TEXT_PRI, font=("Consolas", 13, "bold")).pack(pady=(18, 2))
+        tkinter.Label(inner, text=f"Installata la versione v{_updated_version}",
+                      bg=BG, fg=TEXT_SEC, font=("Consolas", 9)).pack(pady=(0, 10))
+        tkinter.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=20, pady=(0, 10))
+
+        cl_frame = tkinter.Frame(inner, bg=BG)
+        cl_frame.pack(fill="both", expand=True, padx=20)
+        vsb = tkinter.Scrollbar(cl_frame)
+        vsb.pack(side="right", fill="y")
+        txt = tkinter.Text(cl_frame, bg=BG, fg=TEXT_SEC,
+                           font=("Consolas", 9), bd=0, highlightthickness=0,
+                           wrap="word", state="normal", yscrollcommand=vsb.set)
+        txt.pack(side="left", fill="both", expand=True)
+        vsb.config(command=txt.yview)
+        txt.tag_configure("version", font=("Consolas", 10, "bold"), foreground=TEXT_PRI)
+        txt.tag_configure("bullet",  font=("Consolas", 9),           foreground=TEXT_SEC)
+        txt.tag_configure("bold",    font=("Consolas", 9, "bold"),   foreground=TEXT_SEC)
+
+        _cl_file = _HERE / "CHANGELOG.md"
+        if _cl_file.exists():
+            in_target = False
+            for line in _cl_file.read_text(encoding="utf-8").splitlines():
+                if line.startswith("### "):
+                    ver = line[4:].strip().split("—")[0].strip().lstrip("v")
+                    in_target = (ver == _updated_version)
+                    if in_target:
+                        txt.insert("end", line[4:].strip() + "\n", "version")
+                elif line.startswith("#"):
+                    pass
+                elif line.strip().startswith("- ") and in_target:
+                    parts = _re.split(r'(\*\*[^*]+\*\*)', line.strip())
+                    for part in parts:
+                        if part.startswith("**") and part.endswith("**"):
+                            txt.insert("end", part[2:-2], "bold")
+                        else:
+                            txt.insert("end", part, "bullet")
+                    txt.insert("end", "\n")
+        else:
+            txt.insert("end", "Nessun changelog disponibile.", "bullet")
+
+        txt.configure(state="disabled")
+        tkinter.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=20, pady=(10, 0))
+        tkinter.Button(inner, text="Chiudi", command=popup.destroy,
+                       bg=ACCENT, fg="#ffffff", font=("Consolas", 10, "bold"),
+                       relief="flat", padx=18, pady=6, cursor="hand2",
+                       activebackground=ACCENT, activeforeground="#ffffff").pack(pady=12)
 
     def _build_sidebar(self):
         sb = tkinter.Frame(self, bg=_SB_BG, width=150)
@@ -12390,6 +12529,11 @@ def _show_update_dialog(app):
             shutil.move(str(tmp), str(current))
             status_var.set("Aggiornato. Riavvio in corso...")
             popup.update()
+            # Flag per mostrare il changelog al riavvio
+            try:
+                (Path(__file__).parent / "config" / ".updated").write_text(latest, encoding="utf-8")
+            except Exception:
+                pass
             import subprocess
             subprocess.Popen([sys.executable, str(current)])
             sys.exit(0)
@@ -12515,5 +12659,15 @@ if __name__ == "__main__":
         app.after(500, _show_migration_dialog)
     else:
         app.after(500, lambda: _show_update_dialog(app))
+
+    # Popup changelog post-update
+    _UPDATED_FLAG = _HERE / "config" / ".updated"
+    if _UPDATED_FLAG.exists():
+        try:
+            _updated_version = _UPDATED_FLAG.read_text(encoding="utf-8").strip()
+            _UPDATED_FLAG.unlink()
+        except Exception:
+            _updated_version = ""
+        app.after(600, lambda v=_updated_version: app._show_updated_changelog_popup(v))
 
     app.mainloop()
