@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.4.12"
+VERSION_LAUNCHER = "1.5.0"
 
 
 _REQUIRED = {
@@ -4859,39 +4859,43 @@ def _fc_delete(folders: list, log) -> None:
         if not os.path.isdir(folder):
             log(f"[SKIP] Non trovata o non è una cartella: {folder}", "warn")
             continue
-        entries = os.listdir(folder)
-        files = [e for e in entries if os.path.isfile(os.path.join(folder, e)) or
-                                       os.path.islink(os.path.join(folder, e))]
-        dirs  = [e for e in entries if os.path.isdir(os.path.join(folder, e))]
-        total = len(entries)
+
+        files, dirs = [], []
+        with os.scandir(folder) as it:
+            for entry in it:
+                if entry.is_dir(follow_symlinks=False):
+                    dirs.append(entry.path)
+                else:
+                    files.append(entry.path)
+
+        total = len(files) + len(dirs)
         deleted_files = deleted_dirs = errors = done = 0
 
-        def _rm(filename, _folder=folder):
-            os.remove(os.path.join(_folder, filename))
-
-        with ThreadPoolExecutor() as executor:
-            futures = {executor.submit(_rm, f): f for f in files}
+        with ThreadPoolExecutor(max_workers=64) as executor:
+            futures = {executor.submit(os.remove, p): p for p in files}
             for future in as_completed(futures):
                 done += 1
                 try:
                     future.result()
                     deleted_files += 1
                 except Exception as e:
-                    log(f"[WARN] Impossibile eliminare \'{futures[future]}\': {e}", "warn")
+                    log(f"[WARN] Impossibile eliminare '{futures[future]}': {e}", "warn")
                     errors += 1
                 if done % 100 == 0:
                     log(f"[INFO] Eliminati {done}/{total} elementi...", "progress")
 
-        for d in dirs:
-            done += 1
-            try:
-                shutil.rmtree(os.path.join(folder, d))
-                deleted_dirs += 1
-            except Exception as e:
-                log(f"[WARN] Impossibile eliminare \'{d}\': {e}", "warn")
-                errors += 1
-            if done % 100 == 0:
-                log(f"[INFO] Eliminati {done}/{total} elementi...", "progress")
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            futures = {executor.submit(shutil.rmtree, p, True): p for p in dirs}
+            for future in as_completed(futures):
+                done += 1
+                try:
+                    future.result()
+                    deleted_dirs += 1
+                except Exception as e:
+                    log(f"[WARN] Impossibile eliminare '{futures[future]}': {e}", "warn")
+                    errors += 1
+                if done % 100 == 0:
+                    log(f"[INFO] Eliminati {done}/{total} elementi...", "progress")
 
         if total % 100 != 0:
             log(f"[INFO] Eliminati {total}/{total} elementi...", "progress")
@@ -4901,7 +4905,7 @@ def _fc_delete(folders: list, log) -> None:
         if deleted_dirs:  parts.append(f"{deleted_dirs} cartella/e")
         summary = ", ".join(parts) if parts else "nulla"
         status  = f" ({errors} errori)" if errors else ""
-        log(f"[OK] Eliminati {summary} in \'{folder}\'{status}", "ok")
+        log(f"[OK] Eliminati {summary} in '{folder}'{status}", "ok")
 
 
 def folder_cleaner_run_pipeline(log, on_done):
@@ -4970,6 +4974,29 @@ class FolderCleaner(_AppBase):
         self._btn = _icon_btn(hdr, "▶", self._start, ACCENT, "Avvia pulizia")
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
+
+        # ── Drop zone drag & drop cartelle ───────────────────────────────────
+        dz_body = Frame(top, bg=BG_CARD)
+        dz_body.pack(fill="x", padx=8, pady=(6, 2))
+        self._fc_drop_zone = Label(
+            dz_body,
+            text="\U0001f4c2  Trascina qui una o più cartelle",
+            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
+            pady=10, cursor="hand2",
+            highlightthickness=1, highlightbackground=BORDER,
+        )
+        self._fc_drop_zone.pack(fill="x")
+        self._fc_drop_zone.bind("<Button-1>", lambda e: self._browse_folder())
+        self._fc_drop_zone.bind("<Enter>",
+            lambda e: self._fc_drop_zone.configure(highlightbackground=ACCENT))
+        self._fc_drop_zone.bind("<Leave>",
+            lambda e: self._fc_drop_zone.configure(highlightbackground=BORDER))
+        if _HAS_DND:
+            try:
+                self._fc_drop_zone.drop_target_register(_DND_FILES)
+                self._fc_drop_zone.dnd_bind("<<Drop>>", self._on_fc_dnd_drop)
+            except Exception:
+                pass
 
         # Canvas scrollabile per le righe cartelle
         canvas_frame = Frame(top, bg=BG_CARD)
@@ -5127,6 +5154,21 @@ class FolderCleaner(_AppBase):
         self._render_rows()
         self._save_folders()
         self._update_btn_state()
+
+    def _on_fc_dnd_drop(self, event):
+        import re
+        raw = event.data
+        paths = [p[0] or p[1] for p in re.findall(r'\{([^}]+)\}|(\S+)', raw)]
+        added = 0
+        for p in paths:
+            p = p.strip()
+            if os.path.isdir(p) and not self._check_duplicate(p, self._folders):
+                self._folders.append(p)
+                added += 1
+        if added:
+            self._render_rows()
+            self._save_folders()
+            self._update_btn_state()
 
     def _start(self):
         if self._running or not self._folders:
