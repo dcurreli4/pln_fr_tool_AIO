@@ -12523,7 +12523,8 @@ def _show_update_dialog(app):
             import shutil
             resp = _req.get(url, timeout=60, stream=True)
             resp.raise_for_status()
-            current = Path(__file__)
+            current = Path(__file__).resolve()
+            here = current.parent
             tmp = current.with_suffix(".pyw.new")
             with open(tmp, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=8192):
@@ -12536,14 +12537,18 @@ def _show_update_dialog(app):
                     timeout=10,
                 )
                 if cl_resp.ok:
-                    (Path(__file__).parent / "CHANGELOG.md").write_bytes(cl_resp.content)
-            except Exception:
-                pass
+                    (here / "CHANGELOG.md").write_bytes(cl_resp.content)
+                else:
+                    status_var.set(f"CHANGELOG non scaricato: HTTP {cl_resp.status_code}")
+                    popup.update()
+            except Exception as cl_err:
+                status_var.set(f"CHANGELOG non scaricato: {cl_err}")
+                popup.update()
             status_var.set("Aggiornato. Riavvio in corso...")
             popup.update()
             # Flag per mostrare il changelog al riavvio
             try:
-                (Path(__file__).parent / "config" / ".updated").write_text(latest, encoding="utf-8")
+                (here / "config" / ".updated").write_text(latest, encoding="utf-8")
             except Exception:
                 pass
             import subprocess
