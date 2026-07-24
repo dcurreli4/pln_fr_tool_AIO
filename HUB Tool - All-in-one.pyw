@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.5.3"
+VERSION_LAUNCHER = "1.5.4"
 
 
 _REQUIRED = {
@@ -10448,7 +10448,6 @@ class JiraTicketCreator(_AppBase):
                           verify=_JIRA_VERIFY_SSL, timeout=15)
             r.raise_for_status()
             key = r.json().get("key", "?")
-            self._enqueue_log(f"[OK] Ticket creato: {key}", "ok")
             ep    = f"{url}/rest/api/2/issue/{key}/attachments"
             atl_h = {"X-Atlassian-Token": "no-check"}
 
@@ -10541,19 +10540,7 @@ class JiraTicketCreator(_AppBase):
     def _crea_ok(self, key, url):
         self._btn_crea.configure(fg=ACCENT, cursor="hand2")
         self._status_var.set(f"\u2713 Ticket {key} creato.")
-        from datetime import datetime as _dt
-        ts = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
-        tag_name = f"link_{key}"
-        self._log_box.configure(state="normal")
-        self._log_box.tag_configure(tag_name, foreground=ACCENT,
-                                    font=("Consolas", 10, "underline"), cursor="hand2")
-        self._log_box.tag_bind(tag_name, "<Button-1>",
-                               lambda e, u=url: __import__("webbrowser").open(u))
-        self._log_box.insert("end", f"[{ts}] [OK] Ticket creato: {key}  \u2192  ", "ok")
-        self._log_box.insert("end", url + "\n", tag_name)
-        self._log_box.see("end")
-        self._log_box.configure(state="disabled")
-        messagebox.showinfo("Ticket creato!", f"Ticket {key} creato con successo!\n\n{url}")
+        self._enqueue_log(f"[OK] Ticket creato: {key}  \u2192  {url}", "ok")
         self._remove_attachments()
 
     def _crea_err(self, msg):

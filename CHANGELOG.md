@@ -1,3 +1,6 @@
+### v1.5.4 — 2026-07-24
+- **Jira Ticket Creator**: il link al ticket creato appare ora nel log come testo, rimosso il popup di conferma
+
 ### v1.5.3 — 2026-07-24
 - **Payment Plans Filter**: zippatura accelerata con compresslevel=1 al posto del default DEFLATE
 
