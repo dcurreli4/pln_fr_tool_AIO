@@ -12542,6 +12542,16 @@ def _show_update_dialog(app):
                 for chunk in resp.iter_content(chunk_size=8192):
                     f.write(chunk)
             shutil.move(str(tmp), str(current))
+            # Scarica CHANGELOG.md aggiornato
+            try:
+                cl_resp = _req.get(
+                    "https://raw.githubusercontent.com/dcurreli4/pln_fr_tool_AIO/main/CHANGELOG.md",
+                    timeout=10,
+                )
+                if cl_resp.ok:
+                    (Path(__file__).parent / "CHANGELOG.md").write_bytes(cl_resp.content)
+            except Exception:
+                pass
             status_var.set("Aggiornato. Riavvio in corso...")
             popup.update()
             # Flag per mostrare il changelog al riavvio
