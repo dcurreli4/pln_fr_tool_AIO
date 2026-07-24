@@ -1,3 +1,6 @@
+### v1.5.3 — 2026-07-24
+- **Payment Plans Filter**: zippatura accelerata con compresslevel=1 al posto del default DEFLATE
+
 ### v1.5.2 — 2026-07-24
 - **Payment Plans Filter**: elaborazione file parallelizzata con 16 worker — tempo stimato da ~7 minuti a ~1 minuto su 600+ file
 

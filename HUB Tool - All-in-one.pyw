@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.5.2"
+VERSION_LAUNCHER = "1.5.3"
 
 
 _REQUIRED = {
@@ -6105,7 +6105,7 @@ def pp_run_pipeline(cfg_data, log_fn, on_done):
         if output_files:
             import zipfile as _zf_pp
             log_fn(f"\n[INFO] ZIP: {zip_path.name} ...", "info")
-            with _zf_pp.ZipFile(zip_path, "w", _zf_pp.ZIP_DEFLATED) as zf:
+            with _zf_pp.ZipFile(zip_path, "w", _zf_pp.ZIP_DEFLATED, compresslevel=1) as zf:
                 for file in output_files:
                     zf.write(file, file.relative_to(output_folder))
             log_fn(f"[OK] ZIP creato: {zip_path}", "ok")
