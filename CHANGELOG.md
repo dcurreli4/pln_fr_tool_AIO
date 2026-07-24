@@ -1,3 +1,6 @@
+### v1.5.2 — 2026-07-24
+- **Payment Plans Filter**: elaborazione file parallelizzata con 16 worker — tempo stimato da ~7 minuti a ~1 minuto su 600+ file
+
 ### v1.5.1 — 2026-07-23
 - **About**: aggiunto bottone "📋 Changelog" che apre il pannello storico versioni
 - **Changelog**: pannello con storico versioni, testo in grassetto, scrollabile

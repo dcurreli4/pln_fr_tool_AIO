@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.5.1"
+VERSION_LAUNCHER = "1.5.2"
 
 
 _REQUIRED = {
@@ -6074,13 +6074,28 @@ def pp_run_pipeline(cfg_data, log_fn, on_done):
         log_fn(f"\n[INFO] File da elaborare: {len(csv_files)}", "info")
         total_old = total_new = 0
         interval  = int(cfg_data.get("progress_interval", 100))
-        for i, csv_path in enumerate(csv_files, 1):
+        done_count = 0
+        lock = threading.Lock()
+
+        def _process_one(csv_path):
+            nonlocal total_old, total_new, done_count
             old, new = _pp_process_file(
                 csv_path, filter_set, output_folder / csv_path.name, cfg_data, log_fn)
-            total_old += old
-            total_new += new
-            if i % interval == 0 or i == len(csv_files):
-                log_fn(f"[INFO] Avanzamento: {i}/{len(csv_files)} file", "info")
+            with lock:
+                total_old  += old
+                total_new  += new
+                done_count += 1
+                if done_count % interval == 0 or done_count == len(csv_files):
+                    log_fn(f"[INFO] Avanzamento: {done_count}/{len(csv_files)} file", "info")
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            futures = [executor.submit(_process_one, p) for p in csv_files]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    log_fn(f"[ERRORE] {e}", "error")
 
         output_files = [f for f in output_folder.rglob("*") if f.is_file()]
         log_fn("\n\u2500\u2500 Riepilogo \u2500\u2500", "section")
