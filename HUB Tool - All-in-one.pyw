@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.5.4"
+VERSION_LAUNCHER = "1.5.5"
 
 
 _REQUIRED = {
@@ -5710,6 +5710,29 @@ class ZipFolder(_AppBase):
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
 
+        # ── Drop zone drag & drop cartelle ───────────────────────────────────
+        dz_body = Frame(top, bg=BG_CARD)
+        dz_body.pack(fill="x", padx=8, pady=(6, 2))
+        self._zf_drop_zone = Label(
+            dz_body,
+            text="\U0001f4c2  Trascina qui una o più cartelle",
+            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
+            pady=10, cursor="hand2",
+            highlightthickness=1, highlightbackground=BORDER,
+        )
+        self._zf_drop_zone.pack(fill="x")
+        self._zf_drop_zone.bind("<Button-1>", lambda e: self._browse_folder())
+        self._zf_drop_zone.bind("<Enter>",
+            lambda e: self._zf_drop_zone.configure(highlightbackground=ACCENT))
+        self._zf_drop_zone.bind("<Leave>",
+            lambda e: self._zf_drop_zone.configure(highlightbackground=BORDER))
+        if _HAS_DND:
+            try:
+                self._zf_drop_zone.drop_target_register(_DND_FILES)
+                self._zf_drop_zone.dnd_bind("<<Drop>>", self._on_zf_dnd_drop)
+            except Exception:
+                pass
+
         # Canvas scrollabile per lista cartelle
         canvas_frame = Frame(top, bg=BG_CARD)
         canvas_frame.pack(fill="both", expand=True, padx=6, pady=6)
@@ -5866,6 +5889,19 @@ class ZipFolder(_AppBase):
             self._out_var.set(path)
             self._status_var.set(f"Output: {path}")
 
+    def _on_zf_dnd_drop(self, event):
+        import re
+        raw = event.data
+        paths = [p[0] or p[1] for p in re.findall(r'\{([^}]+)\}|(\S+)', raw)]
+        added = 0
+        for p in paths:
+            p = p.strip()
+            if os.path.isdir(p) and not self._check_duplicate(p, self._folders_data):
+                self._folders_data.append(p)
+                added += 1
+        if added:
+            self._save_and_reload()
+
     def _on_filter_toggle(self):
         state = "normal" if self._filter_enabled.get() else "disabled"
         self._filter_entry.configure(state=state)
@@ -5900,6 +5936,10 @@ class ZipFolder(_AppBase):
         if success:
             self._status_var.set("✓ ZIP completati.")
             self._btn.configure(fg=SUCCESS, cursor="hand2")
+            try:
+                os.startfile(self._out_var.get().strip() or str(_ZF_DEFAULT_OUT))
+            except Exception:
+                pass
         else:
             self._status_var.set("✗ Terminato con errori o avvisi.")
             self._btn.configure(fg=ERROR, cursor="hand2")
@@ -6578,6 +6618,9 @@ def csv_blank_header_run_pipeline(file_paths, log, on_done):
             try:
                 with open(src, "rb") as f_in:
                     first = f_in.readline()
+                    if first == b"":
+                        log(f"[SKIP] {src.name} — file vuoto", "warn")
+                        skip += 1; continue
                     if first.strip(b"\r\n") != b"":
                         log(f"[SKIP] {src.name} — prima riga non vuota", "warn")
                         skip += 1; continue
@@ -8822,6 +8865,29 @@ class CsvBlankHeaderRemover(_AppBase):
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
 
+        # ── Drop zone drag & drop file CSV/TXT ───────────────────────────────
+        dz_body = Frame(top, bg=BG_CARD)
+        dz_body.pack(fill="x", padx=8, pady=(6, 2))
+        self._cbr_drop_zone = Label(
+            dz_body,
+            text="\U0001f4c2  Trascina qui uno o più file (.csv, .txt)",
+            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
+            pady=10, cursor="hand2",
+            highlightthickness=1, highlightbackground=BORDER,
+        )
+        self._cbr_drop_zone.pack(fill="x")
+        self._cbr_drop_zone.bind("<Button-1>", lambda e: self._browse_files())
+        self._cbr_drop_zone.bind("<Enter>",
+            lambda e: self._cbr_drop_zone.configure(highlightbackground=ACCENT))
+        self._cbr_drop_zone.bind("<Leave>",
+            lambda e: self._cbr_drop_zone.configure(highlightbackground=BORDER))
+        if _HAS_DND:
+            try:
+                self._cbr_drop_zone.drop_target_register(_DND_FILES)
+                self._cbr_drop_zone.dnd_bind("<<Drop>>", self._on_cbr_dnd_drop)
+            except Exception:
+                pass
+
         # Canvas scrollabile
         canvas_frame = Frame(top, bg=BG_CARD)
         canvas_frame.pack(fill="both", expand=True, padx=6, pady=6)
@@ -8931,6 +8997,17 @@ class CsvBlankHeaderRemover(_AppBase):
             self._save_and_reload()
         if skipped:
             self._warn_status(f"⚠ {skipped} file già presenti ignorati.")
+
+    def _on_cbr_dnd_drop(self, event):
+        import re
+        raw = event.data
+        paths = [p[0] or p[1] for p in re.findall(r'\{([^}]+)\}|(\S+)', raw)]
+        existing = set(self._files_data)
+        added = [p for p in paths
+                 if p.lower().endswith((".csv", ".txt")) and p not in existing]
+        if added:
+            self._files_data.extend(added)
+            self._save_and_reload()
 
     def _update_btn_state(self):
         has = bool(self._files_data)

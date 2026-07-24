@@ -1,3 +1,9 @@
+### v1.5.5 — 2026-07-24
+- **ZIP Folder**: aggiunta drop zone drag & drop per aggiungere cartelle trascinandole direttamente
+- **ZIP Folder**: apertura automatica cartella output nell'esplora risorse al termine della compressione
+- **CSV Blank Header Remover**: aggiunta drop zone drag & drop per file .csv e .txt
+- **CSV Blank Header Remover**: fix — file completamente vuoti vengono ora skippati con avviso invece di creare un output vuoto
+
 ### v1.5.4 — 2026-07-24
 - **Jira Ticket Creator**: il link al ticket creato appare ora nel log come testo, rimosso il popup di conferma
 
