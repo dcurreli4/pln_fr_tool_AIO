@@ -13,6 +13,7 @@ Doppio clic su `HUB Tool - All-in-one.pyw` (nessuna console). Le dipendenze manc
 | **HUB Console** | Console SQL interattiva sul database HUB (PostgreSQL) |
 | **HUB Prod Sync** | Sincronizza tabelle da HUB Produzione verso INTEGRATION o RECETTE via SSH tunnel e bulk copy |
 | **Kraken Data Extractor** | Estrae dati dal DB Kraken con query configurabili da file di input |
+| **Kraken Full Data Extractor** | Estrazione completa da Kraken con supporto multi-flow (Cheque Energie, ecc.) e generazione file di registro |
 | **Analysis Data Extractor** | Estrazione dati per analisi ad hoc |
 | **Delta Recovery** | Recupero delta su payment plans mancanti o non trovati per data, tramite query SQL predefinite |
 | **Bonifica PROD** | Operazioni di bonifica (correzione dati) su produzione |
