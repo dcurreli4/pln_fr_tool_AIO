@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.4"
+VERSION_LAUNCHER = "1.6.5"
 
 
 _REQUIRED = {
@@ -6628,7 +6628,7 @@ def _pp_process_file(input_path, filter_set, output_path, cfg, log_fn):
                     distinct_new.add(agreement_id)
         if not output_lines:
             log_fn(f"[INFO] {input_path.name} — tutte le righe filtrate, saltata.", "info")
-            return len(distinct_old), 0
+            return len(distinct_old), set()
         out_name   = output_path.name
         if magheggio:
             out_name = out_name.replace("_C_", "_U_")
@@ -6637,10 +6637,10 @@ def _pp_process_file(input_path, filter_set, output_path, cfg, log_fn):
         log_fn(
             f"[OK] {input_path.name}  \u2192  "
             f"{len(distinct_old)} originali / {len(distinct_new)} mantenuti", "ok")
-        return len(distinct_old), len(distinct_new)
+        return len(distinct_old), distinct_new
     except Exception as e:
         log_fn(f"[ERRORE] {input_path.name}: {e}", "error")
-        return 0, 0
+        return 0, set()
 
 
 def pp_run_pipeline(cfg_data, log_fn, on_done):
@@ -6704,18 +6704,19 @@ def pp_run_pipeline(cfg_data, log_fn, on_done):
             on_done(success=False); return
 
         log_fn(f"\n[INFO] File da elaborare: {len(csv_files)}", "info")
-        total_old = total_new = 0
-        interval  = int(cfg_data.get("progress_interval", 100))
-        done_count = 0
+        total_old      = 0
+        global_new_ids = set()
+        interval       = int(cfg_data.get("progress_interval", 100))
+        done_count     = 0
         lock = threading.Lock()
 
         def _process_one(csv_path):
-            nonlocal total_old, total_new, done_count
-            old, new = _pp_process_file(
+            nonlocal total_old, done_count
+            old, new_ids = _pp_process_file(
                 csv_path, filter_set, output_folder / csv_path.name, cfg_data, log_fn)
             with lock:
                 total_old  += old
-                total_new  += new
+                global_new_ids.update(new_ids)
                 done_count += 1
                 if done_count % interval == 0 or done_count == len(csv_files):
                     log_fn(f"[INFO] Avanzamento: {done_count}/{len(csv_files)} file", "info")
@@ -6732,7 +6733,7 @@ def pp_run_pipeline(cfg_data, log_fn, on_done):
         output_files = [f for f in output_folder.rglob("*") if f.is_file()]
         log_fn("\n\u2500\u2500 Riepilogo \u2500\u2500", "section")
         log_fn(f"[INFO] Input: {len(csv_files)}  |  Output: {len(output_files)}", "info")
-        log_fn(f"[INFO] ID originali: {total_old}  |  mantenuti: {total_new}", "info")
+        log_fn(f"[INFO] ID distinti mantenuti: {len(global_new_ids)}", "info")
 
         if output_files:
             import zipfile as _zf_pp

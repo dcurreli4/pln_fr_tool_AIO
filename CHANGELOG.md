@@ -1,3 +1,6 @@
+### v1.6.5 — 2026-07-30
+- **Payment Plans Filter**: il riepilogo finale mostra ora gli agreement ID distinti mantenuti globalmente su tutti i file (non la somma dei distinti per file)
+
 ### v1.6.4 — 2026-07-30
 - **Validator — Invoice / Jira Ticket Creator**: aggiunta distinzione B2C/B2B — le fatture B2B (EB2B/GB2B) saltano la validazione HUB, le B2C (EB2C/GB2C) vengono validate; reference miste B2C+B2B bloccano con errore
 
