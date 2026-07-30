@@ -1,3 +1,13 @@
+### v1.6.3 — 2026-07-30
+- **Jira Ticket Creator**: aggiunta validazione invoice su HUB (`j_kraken_invoice`) prima della creazione ticket — verifica presenza reference EB/GB e confronto totale gross_amount per ogni ZIP; se fallisce il ticket non viene creato
+- **Jira Ticket Creator**: validazione invoice eseguita anche in modalità DEBUG (specchio del flusso reale)
+- **Jira Ticket Creator**: debug spostato in thread separato — l'interfaccia resta reattiva e i log arrivano in tempo reale
+- **Validator — Invoice**: fix lettura file in ZIP con sottocartella (usato path completo invece del solo basename)
+- **Validator — Invoice**: aggiunto messaggio di fine validazione (successo o errori)
+
+### v1.6.2 — 2026-07-30
+- **Validator — Invoice**: la verifica delle reference e il confronto degli importi ora interrogano direttamente `j_kraken_invoice` su HUB (eliminata la connessione a Kraken e il recupero query tramite `hub_config_query_kraken`)
+
 ### v1.6.1 — 2026-07-30
 - **Kraken Full Data Extractor — Invoice**: rimossa la TRUNCATE, introdotto delta load — cancella solo i record con `finalized_at >= max(finalized_at)` per prefisso (EB/GB) e ricarica dal delta Kraken; se la tabella è vuota esegue full load
 

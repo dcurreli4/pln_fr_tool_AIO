@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.1"
+VERSION_LAUNCHER = "1.6.3"
 
 
 _REQUIRED = {
@@ -5552,11 +5552,15 @@ class FileValidator(_AppBase):
                     all_ok = False
                     continue
 
+                import os as _os
                 leaf_files, err = _jira_validate_zip_structure(all_entries)
                 if err:
                     self._enqueue_log(f"[ERRORE] Struttura ZIP non valida: {err}", "error")
                     all_ok = False
                     continue
+                # mappa basename → path completo dentro lo ZIP
+                _zip_paths = {_os.path.basename(e): e
+                              for e in all_entries if not e.endswith("/")}
 
                 non_csv = [n for n in leaf_files if not n.lower().endswith(".csv")]
                 if non_csv:
@@ -5601,7 +5605,7 @@ class FileValidator(_AppBase):
                 with _zf.ZipFile(entry_path, "r") as z:
                     for name in leaf_files:
                         try:
-                            content = z.read(name).decode("utf-8")
+                            content = z.read(_zip_paths.get(name, name)).decode("utf-8")
                             lines   = content.splitlines()
                             if lines:
                                 parts = lines[0].split(";")
@@ -5700,69 +5704,54 @@ class FileValidator(_AppBase):
                 f"[OK] Tipo: {tipo}  |  {count} file  |  "
                 f"Totale: {total:.2f}  |  Reference distinte: {len(references)}", "ok")
 
-            # Query Kraken: cerca le reference via query invoice (ELEC + GAS)
+            # Query HUB: cerca le reference su j_kraken_invoice
             if references:
-                self._enqueue_log("[INFO] Connessione HUB per recupero query...", "info")
+                self._enqueue_log("[INFO] Connessione HUB in corso...", "info")
                 try:
                     _reload_env()
                     hub_conn = get_hub_connection()
-                    lista_identifier = ", ".join(f"'{r}'" for r in references)
                     try:
-                        query_elec = load_query_from_hub_identifier(
-                            hub_conn, "query_invoice_elec.sql", lista_identifier)
-                        query_gas  = load_query_from_hub_identifier(
-                            hub_conn, "query_invoice_gas.sql",  lista_identifier)
-                    finally:
-                        hub_conn.close()
-
-                    self._enqueue_log("[INFO] Connessione Kraken in corso...", "info")
-                    kraken_conn = get_kraken_connection()
-                    try:
+                        ref_list = list(references)
+                        cur = hub_conn.cursor()
+                        cur.execute(
+                            "SELECT identifier, "
+                            "(template_vars_json::json#>>'{sumup,gross_amount}')::numeric "
+                            "FROM j_kraken_invoice WHERE identifier = ANY(%s)",
+                            (ref_list,),
+                        )
                         found        = set()
                         kraken_total = 0.0
-                        for label, query in [("ELEC", query_elec), ("GAS", query_gas)]:
-                            if not query:
-                                self._enqueue_log(
-                                    f"[WARN] Query {label} non trovata su HUB.", "warn")
-                                continue
-                            wrapped = (
-                                f"SELECT sub.identifier, "
-                                f"(sub.template_vars_json::json#>>\'{{sumup,gross_amount}}\')::numeric AS gross_amount "
-                                f"FROM ({query}) sub"
-                            )
-                            cur = kraken_conn.cursor()
-                            cur.execute(wrapped)
-                            for row in cur.fetchall():
-                                identifier, gross = row[0], row[1]
-                                if identifier:
-                                    found.add(identifier)
-                                if gross is not None:
-                                    try:
-                                        kraken_total += float(gross)
-                                    except (TypeError, ValueError):
-                                        pass
-                            cur.close()
+                        for row in cur.fetchall():
+                            identifier, gross = row[0], row[1]
+                            if identifier:
+                                found.add(identifier)
+                            if gross is not None:
+                                try:
+                                    kraken_total += float(gross)
+                                except (TypeError, ValueError):
+                                    pass
+                        cur.close()
                     finally:
-                        kraken_conn.close()
+                        hub_conn.close()
 
                     missing = references - found
                     if missing:
                         self._enqueue_log(
-                            f"[ERRORE] Trovate su Kraken: {len(found)}/{len(references)}  |  "
+                            f"[ERRORE] Trovate su HUB: {len(found)}/{len(references)}  |  "
                             f"Mancanti: {len(missing)}", "error")
                         all_ok = False
                     else:
                         self._enqueue_log(
-                            f"[OK] Trovate su Kraken: {len(found)}/{len(references)}", "ok")
+                            f"[OK] Trovate su HUB: {len(found)}/{len(references)}", "ok")
 
                     # Confronto totali
                     if abs(kraken_total - total) < 0.01:
                         self._enqueue_log(
-                            f"[OK] Totale Kraken: {kraken_total:.2f}  |  "
+                            f"[OK] Totale HUB: {kraken_total:.2f}  |  "
                             f"Totale file: {total:.2f}  |  Corrispondono", "ok")
                     else:
                         self._enqueue_log(
-                            f"[ERRORE] Totale Kraken: {kraken_total:.2f}  |  "
+                            f"[ERRORE] Totale HUB: {kraken_total:.2f}  |  "
                             f"Totale file: {total:.2f}  |  Differenza: {abs(kraken_total - total):.2f}",
                             "error")
                         all_ok = False
@@ -5770,6 +5759,10 @@ class FileValidator(_AppBase):
                     self._enqueue_log(f"[ERRORE] {e}", "error")
                     all_ok = False
 
+        if all_ok:
+            self._enqueue_log("\n[OK] Validazione completata con successo.", "ok")
+        else:
+            self._enqueue_log("\n[ERRORE] Validazione completata con errori.", "error")
         self.after(0, lambda: self._on_done(success=all_ok))
 
 
@@ -9765,6 +9758,128 @@ def _jira_validate_zip_structure(all_entries):
     return leaf_names, None
 
 
+_JIRA_INVOICE_TYPES = {"KF", "KR", "KM", "KK"}
+
+
+def _jira_validate_invoice_hub(zip_paths, log_fn):
+    """
+    Valida i file invoice contenuti negli ZIP contro j_kraken_invoice su HUB.
+    log_fn(msg, tag) viene chiamata per ogni messaggio di log.
+    Ritorna True se tutto ok, False se ci sono errori.
+    """
+    import zipfile as _zf, os as _os
+    all_ok      = True
+    has_invoice = False
+
+    try:
+        _reload_env()
+        hub_conn = get_hub_connection()
+    except Exception as e:
+        log_fn(f"[ERRORE] Connessione HUB: {e}", "error")
+        return False
+
+    try:
+        for zip_path in zip_paths:
+            zip_name = _os.path.basename(zip_path)
+            try:
+                with _zf.ZipFile(zip_path, "r") as z:
+                    all_entries = z.namelist()
+                    leaf_files, _ = _jira_validate_zip_structure(all_entries)
+                    if not leaf_files:
+                        continue
+                    invoice_files = [n for n in leaf_files
+                                     if _jira_detect_file_type(n) in _JIRA_INVOICE_TYPES]
+                    if not invoice_files:
+                        continue
+                    has_invoice   = True
+                    zip_entry_map = {_os.path.basename(e): e
+                                     for e in all_entries if not e.endswith("/")}
+                    zip_total      = 0.0
+                    zip_references = set()
+                    parse_errors   = []
+                    for name in invoice_files:
+                        try:
+                            content = z.read(zip_entry_map.get(name, name)).decode("utf-8")
+                            lines   = content.splitlines()
+                            if lines:
+                                parts = lines[0].split(";")
+                                zip_total += float(parts[3])
+                            for line in lines[1:]:
+                                stripped = line.strip()
+                                if not stripped:
+                                    continue
+                                upper = stripped.upper()
+                                if upper.startswith("EB") or upper.startswith("GB"):
+                                    zip_references.add(stripped.split(";")[0])
+                        except Exception:
+                            parse_errors.append(name)
+
+                    if parse_errors:
+                        sample = ", ".join(parse_errors[:3])
+                        extra  = "..." if len(parse_errors) > 3 else ""
+                        log_fn(f"[WARN] {zip_name} — Impossibile leggere: {sample}{extra}", "warn")
+
+                    log_fn(
+                        f"[INFO] {zip_name}  |  Totale: {zip_total:.2f}  |  "
+                        f"Reference distinte: {len(zip_references)}", "info")
+
+                    if not zip_references:
+                        log_fn(f"[WARN] {zip_name} — Nessuna reference EB/GB trovata.", "warn")
+                        continue
+
+                    # Query HUB per questo ZIP
+                    cur = hub_conn.cursor()
+                    cur.execute(
+                        "SELECT identifier, "
+                        "(template_vars_json::json#>>'{sumup,gross_amount}')::numeric "
+                        "FROM j_kraken_invoice WHERE identifier = ANY(%s)",
+                        (list(zip_references),),
+                    )
+                    found        = set()
+                    kraken_total = 0.0
+                    for row in cur.fetchall():
+                        identifier, gross = row[0], row[1]
+                        if identifier:
+                            found.add(identifier)
+                        if gross is not None:
+                            try:
+                                kraken_total += float(gross)
+                            except (TypeError, ValueError):
+                                pass
+                    cur.close()
+
+                    missing = zip_references - found
+                    if missing:
+                        log_fn(
+                            f"[ERRORE] {zip_name}  |  Trovate su HUB: {len(found)}/{len(zip_references)}  |  "
+                            f"Mancanti: {len(missing)}", "error")
+                        all_ok = False
+                    else:
+                        log_fn(f"[OK] {zip_name}  |  Trovate su HUB: {len(found)}/{len(zip_references)}", "ok")
+
+                    if abs(kraken_total - zip_total) < 0.01:
+                        log_fn(
+                            f"[OK] {zip_name}  |  Totale HUB: {kraken_total:.2f}  |  "
+                            f"Totale file: {zip_total:.2f}  |  Corrispondono", "ok")
+                    else:
+                        log_fn(
+                            f"[ERRORE] {zip_name}  |  Totale HUB: {kraken_total:.2f}  |  "
+                            f"Totale file: {zip_total:.2f}  |  Differenza: {abs(kraken_total - zip_total):.2f}",
+                            "error")
+                        all_ok = False
+
+            except Exception as e:
+                log_fn(f"[ERRORE] Impossibile leggere {zip_name}: {e}", "error")
+                all_ok = False
+    finally:
+        hub_conn.close()
+
+    if not has_invoice:
+        log_fn("[WARN] Nessun file invoice (KF/KR/KM/KK) trovato — verifica HUB saltata.", "warn")
+
+    return all_ok
+
+
 def _jira_build_cfg(key, zip_paths, jira_env="PROD"):
     """Ritorna (cfg_content, errore). errore è None se tutto ok."""
     import zipfile as _zf, os as _os
@@ -10949,69 +11064,77 @@ class JiraTicketCreator(_AppBase):
         """Simula creazione ticket senza chiamare Jira — mostra il .cfg nel log."""
         self._enqueue_log("\n── DEBUG MODE ──", "section")
 
-        # Campi base
-        proj  = self._proj_var.get().strip()
-        title = self._title_var.get().strip()
-        tipo  = self._tipo_var.get()
-        prio  = self._prio_var.get()
-        assegn = self._assegn_var.get().strip()
-        desc  = self._desc_text.get("1.0", tkinter.END).strip()
+        # Legge i valori UI prima di passare al thread
+        proj       = self._proj_var.get().strip()
+        title      = self._title_var.get().strip()
+        tipo       = self._tipo_var.get()
+        prio       = self._prio_var.get()
+        assegn     = self._assegn_var.get().strip()
+        desc       = self._desc_text.get("1.0", tkinter.END).strip()
+        allegati   = list(self._allegati)
+        cfg_on     = self._cfg_var.get()
+        jira_env   = self._jira_env_get()
 
-        fake_key = f"{proj or 'PRJ'}-99999"
-
-        self._enqueue_log(f"[DEBUG] Ticket simulato: {fake_key}", "info")
-
-        if self._allegati:
-            self._enqueue_log(f"[DEBUG] Allegati ({len(self._allegati)}):", "info")
-            import os as _os
-            for fp in self._allegati:
-                self._enqueue_log(f"         • {_os.path.basename(fp)}", "info")
-        else:
-            self._enqueue_log("[DEBUG] Allegati: nessuno", "info")
-
-        if self._cfg_var.get():
+        def _run():
             import os as _os, zipfile as _zf
-            zip_paths = [fp for fp in self._allegati if fp.lower().endswith(".zip")]
-            if not zip_paths:
-                self._enqueue_log("[DEBUG] .cfg: ✗ Nessun ZIP tra gli allegati", "error")
-                return
-            cfg_content, err = _jira_build_cfg(fake_key, zip_paths, self._jira_env_get())
-            if err:
-                self._enqueue_log(f"[DEBUG] .cfg: ✗ {err}", "error")
+            fake_key = f"{proj or 'PRJ'}-99999"
+            self._enqueue_log(f"[DEBUG] Ticket simulato: {fake_key}", "info")
+
+            if allegati:
+                self._enqueue_log(f"[DEBUG] Allegati ({len(allegati)}):", "info")
+                for fp in allegati:
+                    self._enqueue_log(f"         • {_os.path.basename(fp)}", "info")
             else:
-                self._enqueue_log("[DEBUG] .cfg generato:", "ok")
-                for line in cfg_content.splitlines():
-                    self._enqueue_log(f"         {line}", "ok")
+                self._enqueue_log("[DEBUG] Allegati: nessuno", "info")
 
-                # Conteggio file per cartella destinazione
-                dir_files: dict = {}  # target_dir -> [(zip_name, count)]
-                for fp in zip_paths:
-                    zip_name = _os.path.basename(fp)
-                    try:
-                        with _zf.ZipFile(fp, "r") as z:
-                            csv_files = [n for n in z.namelist()
-                                         if not n.endswith("/") and n.lower().endswith(".csv")]
-                            count = len(csv_files)
-                    except Exception:
-                        count = 0
-                    # Trova il target_dir per questo ZIP dal .cfg
-                    for line in cfg_content.splitlines()[1:]:
-                        parts = line.split(";")
-                        if len(parts) == 3 and parts[1] == zip_name:
-                            target = parts[2]
-                            dir_files.setdefault(target, []).append((zip_name, count))
-                            break
+            if cfg_on:
+                zip_paths = [fp for fp in allegati if fp.lower().endswith(".zip")]
+                if not zip_paths:
+                    self._enqueue_log("[DEBUG] .cfg: ✗ Nessun ZIP tra gli allegati", "error")
+                    self._enqueue_log("── Fine DEBUG ──\n", "section")
+                    return
+                cfg_content, err = _jira_build_cfg(fake_key, zip_paths, jira_env)
+                if err:
+                    self._enqueue_log(f"[DEBUG] .cfg: ✗ {err}", "error")
+                else:
+                    self._enqueue_log("[DEBUG] .cfg generato:", "ok")
+                    for line in cfg_content.splitlines():
+                        self._enqueue_log(f"         {line}", "ok")
 
-                if dir_files:
-                    lines = ["[DEBUG] File per cartella destinazione:"]
-                    for target, entries in dir_files.items():
-                        total = sum(c for _, c in entries)
-                        lines.append(f"         {target}  →  {total} file")
-                    self._enqueue_log("\n".join(lines), "info")
-        else:
-            self._enqueue_log("[DEBUG] .cfg: disabilitato", "info")
+                    # Conteggio file per cartella destinazione
+                    dir_files: dict = {}
+                    for fp in zip_paths:
+                        zip_name = _os.path.basename(fp)
+                        try:
+                            with _zf.ZipFile(fp, "r") as z:
+                                csv_files = [n for n in z.namelist()
+                                             if not n.endswith("/") and n.lower().endswith(".csv")]
+                                count = len(csv_files)
+                        except Exception:
+                            count = 0
+                        for line in cfg_content.splitlines()[1:]:
+                            parts = line.split(";")
+                            if len(parts) == 3 and parts[1] == zip_name:
+                                target = parts[2]
+                                dir_files.setdefault(target, []).append((zip_name, count))
+                                break
 
-        self._enqueue_log("── Fine DEBUG ──\n", "section")
+                    if dir_files:
+                        lines = ["[DEBUG] File per cartella destinazione:"]
+                        for target, entries in dir_files.items():
+                            total = sum(c for _, c in entries)
+                            lines.append(f"         {target}  →  {total} file")
+                        self._enqueue_log("\n".join(lines), "info")
+
+                    # Validazione invoice vs HUB
+                    self._enqueue_log("[DEBUG] Validazione invoice su HUB...", "info")
+                    _jira_validate_invoice_hub(zip_paths, self._enqueue_log)
+            else:
+                self._enqueue_log("[DEBUG] .cfg: disabilitato", "info")
+
+            self._enqueue_log("── Fine DEBUG ──\n", "section")
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _pulisci(self):
         for var in (self._proj_var, self._title_var, self._assegn_var):
@@ -11101,6 +11224,14 @@ class JiraTicketCreator(_AppBase):
                     return
                 self._cfg_content = cfg_content
                 self._enqueue_log("[OK] Validazione ZIP superata.", "ok")
+
+                # Validazione invoice vs HUB (processa solo i file KF/KR/KM/KK trovati negli ZIP)
+                self._enqueue_log("[INFO] Validazione invoice su HUB...", "info")
+                hub_ok = _jira_validate_invoice_hub(zip_paths, self._enqueue_log)
+                if not hub_ok:
+                    self.after(0, self._crea_err,
+                               "Validazione invoice fallita — ticket non creato.")
+                    return
 
             # ── Step 2: Crea ticket (senza assegnatario) ──────────────────
             payload = {"fields": {
