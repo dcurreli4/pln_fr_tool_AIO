@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.3"
+VERSION_LAUNCHER = "1.6.4"
 
 
 _REQUIRED = {
@@ -5706,58 +5706,66 @@ class FileValidator(_AppBase):
 
             # Query HUB: cerca le reference su j_kraken_invoice
             if references:
-                self._enqueue_log("[INFO] Connessione HUB in corso...", "info")
-                try:
-                    _reload_env()
-                    hub_conn = get_hub_connection()
-                    try:
-                        ref_list = list(references)
-                        cur = hub_conn.cursor()
-                        cur.execute(
-                            "SELECT identifier, "
-                            "(template_vars_json::json#>>'{sumup,gross_amount}')::numeric "
-                            "FROM j_kraken_invoice WHERE identifier = ANY(%s)",
-                            (ref_list,),
-                        )
-                        found        = set()
-                        kraken_total = 0.0
-                        for row in cur.fetchall():
-                            identifier, gross = row[0], row[1]
-                            if identifier:
-                                found.add(identifier)
-                            if gross is not None:
-                                try:
-                                    kraken_total += float(gross)
-                                except (TypeError, ValueError):
-                                    pass
-                        cur.close()
-                    finally:
-                        hub_conn.close()
-
-                    missing = references - found
-                    if missing:
-                        self._enqueue_log(
-                            f"[ERRORE] Trovate su HUB: {len(found)}/{len(references)}  |  "
-                            f"Mancanti: {len(missing)}", "error")
-                        all_ok = False
-                    else:
-                        self._enqueue_log(
-                            f"[OK] Trovate su HUB: {len(found)}/{len(references)}", "ok")
-
-                    # Confronto totali
-                    if abs(kraken_total - total) < 0.01:
-                        self._enqueue_log(
-                            f"[OK] Totale HUB: {kraken_total:.2f}  |  "
-                            f"Totale file: {total:.2f}  |  Corrispondono", "ok")
-                    else:
-                        self._enqueue_log(
-                            f"[ERRORE] Totale HUB: {kraken_total:.2f}  |  "
-                            f"Totale file: {total:.2f}  |  Differenza: {abs(kraken_total - total):.2f}",
-                            "error")
-                        all_ok = False
-                except Exception as e:
-                    self._enqueue_log(f"[ERRORE] {e}", "error")
+                b2c = {r for r in references if r.upper().startswith("EB2C") or r.upper().startswith("GB2C")}
+                b2b = {r for r in references if r.upper().startswith("EB2B") or r.upper().startswith("GB2B")}
+                if b2c and b2b:
+                    self._enqueue_log("[ERRORE] Reference miste B2C e B2B non ammesse.", "error")
                     all_ok = False
+                elif b2b:
+                    self._enqueue_log("[OK] Fatture B2B — validazione HUB saltata.", "ok")
+                else:
+                    self._enqueue_log("[INFO] Connessione HUB in corso...", "info")
+                    try:
+                        _reload_env()
+                        hub_conn = get_hub_connection()
+                        try:
+                            ref_list = list(references)
+                            cur = hub_conn.cursor()
+                            cur.execute(
+                                "SELECT identifier, "
+                                "(template_vars_json::json#>>'{sumup,gross_amount}')::numeric "
+                                "FROM j_kraken_invoice WHERE identifier = ANY(%s)",
+                                (ref_list,),
+                            )
+                            found        = set()
+                            kraken_total = 0.0
+                            for row in cur.fetchall():
+                                identifier, gross = row[0], row[1]
+                                if identifier:
+                                    found.add(identifier)
+                                if gross is not None:
+                                    try:
+                                        kraken_total += float(gross)
+                                    except (TypeError, ValueError):
+                                        pass
+                            cur.close()
+                        finally:
+                            hub_conn.close()
+
+                        missing = references - found
+                        if missing:
+                            self._enqueue_log(
+                                f"[ERRORE] Trovate su HUB: {len(found)}/{len(references)}  |  "
+                                f"Mancanti: {len(missing)}", "error")
+                            all_ok = False
+                        else:
+                            self._enqueue_log(
+                                f"[OK] Trovate su HUB: {len(found)}/{len(references)}", "ok")
+
+                        # Confronto totali
+                        if abs(kraken_total - total) < 0.01:
+                            self._enqueue_log(
+                                f"[OK] Totale HUB: {kraken_total:.2f}  |  "
+                                f"Totale file: {total:.2f}  |  Corrispondono", "ok")
+                        else:
+                            self._enqueue_log(
+                                f"[ERRORE] Totale HUB: {kraken_total:.2f}  |  "
+                                f"Totale file: {total:.2f}  |  Differenza: {abs(kraken_total - total):.2f}",
+                                "error")
+                            all_ok = False
+                    except Exception as e:
+                        self._enqueue_log(f"[ERRORE] {e}", "error")
+                        all_ok = False
 
         if all_ok:
             self._enqueue_log("\n[OK] Validazione completata con successo.", "ok")
@@ -9827,7 +9835,18 @@ def _jira_validate_invoice_hub(zip_paths, log_fn):
                         log_fn(f"[WARN] {zip_name} — Nessuna reference EB/GB trovata.", "warn")
                         continue
 
-                    # Query HUB per questo ZIP
+                    # Determina se B2C, B2B o misti
+                    b2c = {r for r in zip_references if r.upper().startswith("EB2C") or r.upper().startswith("GB2C")}
+                    b2b = {r for r in zip_references if r.upper().startswith("EB2B") or r.upper().startswith("GB2B")}
+                    if b2c and b2b:
+                        log_fn(f"[ERRORE] {zip_name} — Reference miste B2C e B2B non ammesse.", "error")
+                        all_ok = False
+                        continue
+                    if b2b:
+                        log_fn(f"[OK] {zip_name} — Fatture B2B, validazione HUB saltata.", "ok")
+                        continue
+
+                    # Query HUB per questo ZIP (solo B2C)
                     cur = hub_conn.cursor()
                     cur.execute(
                         "SELECT identifier, "

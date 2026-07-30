@@ -1,3 +1,6 @@
+### v1.6.4 — 2026-07-30
+- **Validator — Invoice / Jira Ticket Creator**: aggiunta distinzione B2C/B2B — le fatture B2B (EB2B/GB2B) saltano la validazione HUB, le B2C (EB2C/GB2C) vengono validate; reference miste B2C+B2B bloccano con errore
+
 ### v1.6.3 — 2026-07-30
 - **Jira Ticket Creator**: aggiunta validazione invoice su HUB (`j_kraken_invoice`) prima della creazione ticket — verifica presenza reference EB/GB e confronto totale gross_amount per ogni ZIP; se fallisce il ticket non viene creato
 - **Jira Ticket Creator**: validazione invoice eseguita anche in modalità DEBUG (specchio del flusso reale)
