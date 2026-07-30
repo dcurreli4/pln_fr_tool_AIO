@@ -1,3 +1,6 @@
+### v1.6.1 — 2026-07-30
+- **Kraken Full Data Extractor — Invoice**: rimossa la TRUNCATE, introdotto delta load — cancella solo i record con `finalized_at >= max(finalized_at)` per prefisso (EB/GB) e ricarica dal delta Kraken; se la tabella è vuota esegue full load
+
 ### v1.6.0 — 2026-07-30
 - **Validator**: nuova sezione FILE — validatore di file con due modalità (Invoice, Payment)
 - **Validator — Invoice**: valida cartelle e ZIP (KF, KR, KM, KK); controlla struttura, tipo file, assenza di mix tipologie; somma gli importi dalle testate; conta le reference distinte; verifica presenza su Kraken via query invoice (ELEC + GAS) e confronta il totale gross_amount

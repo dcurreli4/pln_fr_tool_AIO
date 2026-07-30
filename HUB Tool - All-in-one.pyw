@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.0"
+VERSION_LAUNCHER = "1.6.1"
 
 
 _REQUIRED = {
@@ -2207,11 +2207,11 @@ def _ade_fmt_time(seconds: float) -> str:
     return f"~{h}h {m:02d}m {s:02d}s" if s else f"~{h}h {m:02d}m"
 
 
-def _ade_load_query(hub_conn, flow: str):
+def _ade_load_query(hub_conn, flow: str, date_filter: str = None):
     """
-    Carica la query da hub_config_query_kraken e rimuove le righe contenenti
-    DATETOINSERT — estrazione full, nessun filtro aggiuntivo.
-    Usa _ADE_HUB_META_QUERIES che include anche i payment SPLUS.
+    Carica la query da hub_config_query_kraken.
+    - date_filter=None  → rimuove il filtro DATETOINSERT (full load, tabella vuota)
+    - date_filter='YYYY-MM-DD' → sostituisce DATETOINSERT con la data (delta load)
     """
     hname = _ADE_HUB_META_QUERIES.get(flow)
     if hname is None:
@@ -2229,13 +2229,16 @@ def _ade_load_query(hub_conn, flow: str):
     lines = []
     for l in row[0].strip().splitlines():
         if "DATETOINSERT" in l or "{COMMODITY}" in l:
-            stripped = l.lstrip()
-            if stripped.lower().startswith("and "):
-                lines.append("    and 1=1")
-            elif stripped.lower().startswith("where "):
-                lines.append("    where 1=1")
+            if date_filter and "DATETOINSERT" in l:
+                lines.append(l.replace("DATETOINSERT", date_filter))
             else:
-                lines.append("    1=1")
+                stripped = l.lstrip()
+                if stripped.lower().startswith("and "):
+                    lines.append("    and 1=1")
+                elif stripped.lower().startswith("where "):
+                    lines.append("    where 1=1")
+                else:
+                    lines.append("    1=1")
         else:
             lines.append(l)
     return "\n".join(lines)
@@ -2309,6 +2312,12 @@ def run_ade_pipeline(flags, log, on_done, app=None):
         failed_tables    = set()  # tabelle con errori: i flow successivi sulla stessa vengono saltati
         elapsed_times: dict = {}
 
+        # Prefissi identifier per il delta invoice
+        _INVOICE_ID_PREFIX = {
+            "query_invoice_elec.sql": "EB",
+            "query_invoice_gas.sql":  "GB",
+        }
+
         for flow, flag_key in _ADE_QUERY_FLAGS.items():
             if not flags.get(flow, False):
                 continue
@@ -2327,22 +2336,63 @@ def run_ade_pipeline(flags, log, on_done, app=None):
 
             log(f"\n── {lbl}  [RUN] ──", "section")
 
-            # TRUNCATE (una sola volta per tabella)
-            if table not in truncated_tables:
+            # ── Invoice: delta load ───────────────────────────────────────
+            if flow in _INVOICE_ID_PREFIX:
+                prefix      = _INVOICE_ID_PREFIX[flow]
+                date_filter = None
                 try:
                     cur = hub_conn.cursor()
-                    cur.execute(f"TRUNCATE TABLE {table};")
-                    hub_conn.commit(); cur.close()
-                    log(f"[OK] Truncate '{table}'", "ok")
-                    truncated_tables.add(table)
+                    cur.execute(
+                        "SELECT MAX(finalized_at)::date::text FROM j_kraken_invoice "
+                        "WHERE identifier LIKE %s",
+                        (f"{prefix}%",),
+                    )
+                    max_date = cur.fetchone()[0]
+                    cur.close()
                 except Exception as e:
-                    hub_conn.rollback()
-                    log(f"[ERRORE] Truncate '{table}' fallita: {e}", "error")
+                    log(f"[ERRORE] Lettura max finalized_at per {prefix}%: {e}", "error")
+                    failed_tables.add(table)
                     continue
+
+                if max_date:
+                    log(f"[INFO] Max finalized_at ({prefix}%): {max_date} — delta load", "info")
+                    try:
+                        cur = hub_conn.cursor()
+                        cur.execute(
+                            "DELETE FROM j_kraken_invoice "
+                            "WHERE identifier LIKE %s AND finalized_at::date >= %s",
+                            (f"{prefix}%", max_date),
+                        )
+                        deleted = cur.rowcount
+                        hub_conn.commit(); cur.close()
+                        log(f"[OK] Eliminati {deleted} record con finalized_at >= {max_date}", "ok")
+                    except Exception as e:
+                        hub_conn.rollback()
+                        log(f"[ERRORE] DELETE delta fallito: {e}", "error")
+                        failed_tables.add(table)
+                        continue
+                    date_filter = max_date
+                else:
+                    log(f"[INFO] Tabella vuota per {prefix}% — full load", "info")
+
+            # ── Altri flow: TRUNCATE + full load (una sola volta per tabella) ─
+            else:
+                if table not in truncated_tables:
+                    try:
+                        cur = hub_conn.cursor()
+                        cur.execute(f"TRUNCATE TABLE {table};")
+                        hub_conn.commit(); cur.close()
+                        log(f"[OK] Truncate '{table}'", "ok")
+                        truncated_tables.add(table)
+                    except Exception as e:
+                        hub_conn.rollback()
+                        log(f"[ERRORE] Truncate '{table}' fallita: {e}", "error")
+                        continue
 
             # Carica query
             log(f"[INFO] Caricamento query '{lbl}' da hub_config_query_kraken ...", "info")
-            query = _ade_load_query(hub_conn, flow)
+            _df = date_filter if flow in _INVOICE_ID_PREFIX else None
+            query = _ade_load_query(hub_conn, flow, _df)
             if query is None:
                 log(f"[ERRORE] Query non trovata per '{lbl}'.", "error")
                 failed_tables.add(table)
