@@ -1,3 +1,6 @@
+### v1.6.6 — 2026-07-30
+- **Payment Plans Filter**: generato file `output/payment plans filter/recovered_ids/recovered_ids.txt` con la lista degli agreement ID distinti mantenuti dal filtro
+
 ### v1.6.5 — 2026-07-30
 - **Payment Plans Filter**: il riepilogo finale mostra ora gli agreement ID distinti mantenuti globalmente su tutti i file (non la somma dei distinti per file)
 

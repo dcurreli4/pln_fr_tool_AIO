@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.5"
+VERSION_LAUNCHER = "1.6.6"
 
 
 _REQUIRED = {
@@ -6734,6 +6734,15 @@ def pp_run_pipeline(cfg_data, log_fn, on_done):
         log_fn("\n\u2500\u2500 Riepilogo \u2500\u2500", "section")
         log_fn(f"[INFO] Input: {len(csv_files)}  |  Output: {len(output_files)}", "info")
         log_fn(f"[INFO] ID distinti mantenuti: {len(global_new_ids)}", "info")
+
+        # Salva lista ID mantenuti
+        if global_new_ids:
+            recovered_dir = _HERE / "output" / "payment plans filter" / "recovered_ids"
+            recovered_dir.mkdir(parents=True, exist_ok=True)
+            recovered_file = recovered_dir / "recovered_ids.txt"
+            recovered_file.write_text(
+                "\n".join(sorted(global_new_ids)), encoding="utf-8")
+            log_fn(f"[OK] Lista ID salvata: {recovered_file}", "ok")
 
         if output_files:
             import zipfile as _zf_pp
