@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.5.5"
+VERSION_LAUNCHER = "1.6.0"
 
 
 _REQUIRED = {
@@ -5181,6 +5181,547 @@ class FolderCleaner(_AppBase):
             args=(self._enqueue_log, self._on_done),
             daemon=True,
         ).start()
+
+# ════════════════════════════════════════════════════════════════════════════
+# FILE VALIDATOR
+# ════════════════════════════════════════════════════════════════════════════
+
+_FV_TXT = _HERE / "input" / "validator" / "folders.txt"
+
+
+class FileValidator(_AppBase):
+
+    def __init__(self, master):
+        super().__init__(master, bg=BG)
+        self._log_queue = queue.Queue()
+        self._running   = False
+        self._folders: list = []
+        self._mode_var  = tkinter.IntVar(value=0)
+        self._build_ui()
+        self._load_folders()
+        self._poll_log()
+
+    def _build_ui(self):
+        self._status_var = tkinter.StringVar(value="Pronto.")
+        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
+        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
+                                  font=("Consolas", 9), anchor="w", pady=5)
+        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+
+        outer = Frame(self, bg=BG)
+        outer.pack(fill="both", expand=True, padx=24, pady=(12, 0))
+
+        # ── Layout: sidebar sinistra + contenuto destra ───────────────────
+        sidebar = Frame(outer, bg=BG_CARD, bd=0, highlightthickness=1,
+                        highlightbackground=BORDER, width=160)
+        sidebar.pack(side="left", fill="y", padx=(0, 6))
+        sidebar.pack_propagate(False)
+
+        Label(sidebar, text="MODALITÀ", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 9, "bold"), pady=10, padx=14,
+              anchor="w").pack(fill="x")
+        Frame(sidebar, bg=BORDER, height=1).pack(fill="x", padx=14)
+
+        for i, label in enumerate(["Invoice", "Payment"]):
+            rb_frame = Frame(sidebar, bg=BG_CARD, cursor="hand2")
+            rb_frame.pack(fill="x", padx=10, pady=(8, 0))
+            rb = tkinter.Radiobutton(
+                rb_frame, text=label, variable=self._mode_var, value=i,
+                bg=BG_CARD, fg=TEXT_PRI, selectcolor=BG_CARD,
+                activebackground=BG_CARD, activeforeground=TEXT_PRI,
+                font=("Consolas", 9), anchor="w",
+                indicatoron=True, relief="flat", cursor="hand2",
+            )
+            rb.pack(fill="x")
+
+        # ── Contenuto destra: pannello cartelle + log ─────────────────────
+        right = Frame(outer, bg=BG)
+        right.pack(side="left", fill="both", expand=True)
+
+        paned = tkinter.PanedWindow(right, orient="vertical", bg=BORDER,
+                                    sashwidth=5, sashrelief="flat", bd=0)
+        paned.pack(fill="both", expand=True)
+
+        # ── Pannello superiore: lista cartelle ────────────────────────────
+        top = Frame(paned, bg=BG_CARD, bd=0, highlightthickness=1,
+                    highlightbackground=BORDER)
+
+        hdr = Frame(top, bg=BG_CARD)
+        hdr.pack(fill="x")
+        Label(hdr, text="CARTELLE DA VALIDARE", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
+
+        def _icon_btn(parent, symbol, command, color=ACCENT, tip=""):
+            lbl = Label(parent, text=symbol, bg=BG_CARD, fg=color,
+                        font=("Consolas", 14), cursor="hand2", padx=10, pady=6)
+            lbl.bind("<Button-1>", lambda e: command())
+            lbl.bind("<Enter>",    lambda e: (lbl.configure(bg=BG_HOVER),
+                                              self._status_var.set(tip) if tip else None))
+            lbl.bind("<Leave>",    lambda e: (lbl.configure(bg=BG_CARD),
+                                              self._status_var.set("Pronto.")))
+            return lbl
+
+        _icon_btn(hdr, "🗑", self._remove_all, ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
+        _icon_btn(hdr, "🗜", self._browse_zip,  SUCCESS, "Aggiungi ZIP").pack(side="right", padx=(0, 4))
+        _icon_btn(hdr, "+", self._browse_folder, SUCCESS, "Aggiungi cartella").pack(side="right", padx=(0, 4))
+        self._btn = _icon_btn(hdr, "▶", self._start, ACCENT, "Avvia validazione")
+        self._btn.pack(side="right", padx=(0, 8))
+        Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
+
+        # ── Drop zone drag & drop cartelle ───────────────────────────────────
+        dz_body = Frame(top, bg=BG_CARD)
+        dz_body.pack(fill="x", padx=8, pady=(6, 2))
+        self._fv_drop_zone = Label(
+            dz_body,
+            text="\U0001f4c2  Trascina qui cartelle o file ZIP",
+            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
+            pady=10, cursor="hand2",
+            highlightthickness=1, highlightbackground=BORDER,
+        )
+        self._fv_drop_zone.pack(fill="x")
+        self._fv_drop_zone.bind("<Button-1>", lambda e: self._browse_folder())
+        self._fv_drop_zone.bind("<Enter>",
+            lambda e: self._fv_drop_zone.configure(highlightbackground=ACCENT))
+        self._fv_drop_zone.bind("<Leave>",
+            lambda e: self._fv_drop_zone.configure(highlightbackground=BORDER))
+        if _HAS_DND:
+            try:
+                self._fv_drop_zone.drop_target_register(_DND_FILES)
+                self._fv_drop_zone.dnd_bind("<<Drop>>", self._on_fv_dnd_drop)
+            except Exception:
+                pass
+
+        # Canvas scrollabile per le righe cartelle
+        canvas_frame = Frame(top, bg=BG_CARD)
+        canvas_frame.pack(fill="both", expand=True, padx=6, pady=6)
+        vsb = ttk.Scrollbar(canvas_frame, style="Dark.Vertical.TScrollbar")
+        vsb.pack(side="right", fill="y")
+        self._fv_vsb = vsb
+        self._fv_canvas = tkinter.Canvas(canvas_frame, bg=BG_CARD,
+                                         highlightthickness=0,
+                                         yscrollcommand=vsb.set)
+        self._fv_canvas.pack(side="left", fill="both", expand=True)
+        vsb.config(command=self._fv_canvas.yview)
+        self._fv_inner = Frame(self._fv_canvas, bg=BG_CARD)
+        self._fv_win   = self._fv_canvas.create_window(
+            (0, 0), window=self._fv_inner, anchor="nw")
+        self._fv_inner.bind("<Configure>", self._fv_update_scroll)
+        self._fv_canvas.bind("<Configure>", lambda e: (
+            self._fv_canvas.itemconfig(self._fv_win, width=e.width),
+            self._fv_update_scroll()
+        ))
+        self._fv_canvas.bind("<Enter>", lambda e: self._fv_canvas.bind_all(
+            "<MouseWheel>", lambda e: self._fv_canvas.yview_scroll(
+                -1*(e.delta//120), "units")))
+        self._fv_canvas.bind("<Leave>", lambda e: self._fv_canvas.unbind_all(
+            "<MouseWheel>"))
+
+        paned.add(top, minsize=80, height=180, stretch="never")
+
+        # ── Pannello inferiore: log ───────────────────────────────────────
+        bottom = Frame(paned, bg=BG_CARD, bd=0, highlightthickness=1,
+                       highlightbackground=BORDER)
+        self._build_log_panel(bottom, on_clear=self._clear_log)
+        paned.add(bottom, minsize=100, stretch="always")
+
+    def _poll_log(self):
+        try:
+            while True:
+                msg, level = self._log_queue.get_nowait()
+                self._log_box.configure(state="normal")
+                self._log_box.insert("end", msg + "\n", level)
+                self._log_box.see("end")
+                self._log_box.configure(state="disabled")
+        except queue.Empty:
+            pass
+        self.after(80, self._poll_log)
+
+    def _fv_update_scroll(self, _e=None):
+        self._fv_canvas.update_idletasks()
+        content_h = self._fv_inner.winfo_reqheight()
+        canvas_h  = self._fv_canvas.winfo_height()
+        if content_h > canvas_h:
+            if not self._fv_vsb.winfo_ismapped():
+                self._fv_vsb.pack(side="right", fill="y")
+            self._fv_canvas.configure(scrollregion=(0, 0, 0, content_h))
+        else:
+            if self._fv_vsb.winfo_ismapped():
+                self._fv_vsb.pack_forget()
+            self._fv_canvas.configure(scrollregion=(0, 0, 0, canvas_h))
+            self._fv_canvas.yview_moveto(0)
+
+    def _render_rows(self):
+        for w in self._fv_inner.winfo_children():
+            w.destroy()
+        for path in self._folders:
+            row = Frame(self._fv_inner, bg=BG_CARD)
+            row.pack(fill="x", padx=6, pady=1)
+            x_lbl = Label(row, text="✕", bg=BG_CARD, fg=ERROR,
+                          font=("Consolas", 10, "bold"), cursor="hand2",
+                          padx=8, pady=4)
+            x_lbl.pack(side="left")
+            x_lbl.bind("<Button-1>", lambda e, p=path: self._remove_line(p))
+            x_lbl.bind("<Enter>",    lambda e, l=x_lbl: l.configure(bg=BG_HOVER))
+            x_lbl.bind("<Leave>",    lambda e, l=x_lbl: l.configure(bg=BG_CARD))
+            Label(row, text=path, bg=BG_CARD, fg=TEXT_PRI,
+                  font=("Consolas", 10), anchor="w", pady=4).pack(
+                  side="left", fill="x", expand=True)
+            Frame(self._fv_inner, bg=BORDER, height=1).pack(fill="x", padx=6)
+        self._fv_update_scroll()
+
+    def _update_btn_state(self):
+        has = bool(self._folders)
+        self._btn.configure(fg=ACCENT if has else TEXT_SEC,
+                            cursor="hand2" if has else "arrow")
+
+    def _remove_line(self, path: str):
+        if path in self._folders:
+            self._folders.remove(path)
+            self._render_rows()
+            self._save_folders()
+            self._update_btn_state()
+
+    def _remove_all(self):
+        if not self._folders:
+            return
+        if not messagebox.askyesno("Rimuovi tutto",
+                                   "Rimuovere tutte le cartelle dalla lista?"):
+            return
+        self._folders.clear()
+        self._render_rows()
+        self._save_folders()
+        self._update_btn_state()
+
+    def _load_folders(self):
+        raw = _FV_TXT.read_text(encoding="utf-8") if _FV_TXT.exists() else ""
+        self._folders = [l.strip() for l in raw.splitlines()
+                         if l.strip() and not l.strip().startswith("#")]
+        self._render_rows()
+        self._update_btn_state()
+
+    def _save_folders(self):
+        try:
+            _FV_TXT.parent.mkdir(parents=True, exist_ok=True)
+            _FV_TXT.write_text("\n".join(self._folders), encoding="utf-8")
+        except Exception as e:
+            messagebox.showerror("Errore salvataggio", str(e))
+
+    def _browse_folder(self):
+        path = filedialog.askdirectory(title="Seleziona cartella da validare")
+        if not path:
+            return
+        if self._check_duplicate(path, self._folders):
+            return
+        self._folders.append(path)
+        self._render_rows()
+        self._save_folders()
+        self._update_btn_state()
+
+    def _browse_zip(self):
+        paths = filedialog.askopenfilenames(
+            title="Seleziona file ZIP",
+            filetypes=[("File ZIP", "*.zip"), ("Tutti i file", "*.*")],
+        )
+        added = 0
+        for path in paths:
+            if not self._check_duplicate(path, self._folders):
+                self._folders.append(path)
+                added += 1
+        if added:
+            self._render_rows()
+            self._save_folders()
+            self._update_btn_state()
+
+    def _on_fv_dnd_drop(self, event):
+        import re
+        raw = event.data
+        paths = [p[0] or p[1] for p in re.findall(r'\{([^}]+)\}|(\S+)', raw)]
+        added = 0
+        for p in paths:
+            p = p.strip()
+            is_zip = p.lower().endswith(".zip") and os.path.isfile(p)
+            is_dir = os.path.isdir(p)
+            if (is_zip or is_dir) and not self._check_duplicate(p, self._folders):
+                self._folders.append(p)
+                added += 1
+        if added:
+            self._render_rows()
+            self._save_folders()
+            self._update_btn_state()
+
+    def _on_done(self, success: bool):
+        self._running = False
+        if success:
+            self._status_var.set("✓ Validazione completata.")
+            self._btn.configure(fg=SUCCESS, cursor="hand2")
+        else:
+            self._status_var.set("✗ Terminato con errori o avvisi.")
+            self._btn.configure(fg=ERROR, cursor="hand2")
+        self.after(3000, self._update_btn_state)
+
+    def _start(self):
+        if self._running or not self._folders:
+            return
+        self._running = True
+        self._btn.configure(fg=TEXT_SEC, cursor="arrow")
+        self._status_var.set("In esecuzione...")
+        mode = self._mode_var.get()
+
+        def _run():
+            if mode == 0:
+                self._run_invoice_validation()
+            else:
+                self._enqueue_log("TODO", "info")
+                self.after(0, lambda: self._on_done(success=True))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    _INVOICE_TYPES = {"KF", "KR", "KM", "KK"}
+
+    def _run_invoice_validation(self):
+        folders = list(self._folders)
+        if not folders:
+            self._enqueue_log("[WARN] Nessuna cartella caricata.", "warn")
+            self.after(0, lambda: self._on_done(success=False))
+            return
+        all_ok  = True
+
+        for entry in folders:
+            entry_path = Path(entry)
+            self._enqueue_log(f"\n── {entry_path.name} ──", "section")
+            is_zip = entry_path.suffix.lower() == ".zip"
+
+            if is_zip:
+                # ── Validazione ZIP (stessa logica di Jira Ticket Creator) ──
+                import zipfile as _zf
+                try:
+                    with _zf.ZipFile(entry_path, "r") as z:
+                        all_entries = z.namelist()
+                except Exception as e:
+                    self._enqueue_log(f"[ERRORE] Impossibile leggere lo ZIP: {e}", "error")
+                    all_ok = False
+                    continue
+
+                leaf_files, err = _jira_validate_zip_structure(all_entries)
+                if err:
+                    self._enqueue_log(f"[ERRORE] Struttura ZIP non valida: {err}", "error")
+                    all_ok = False
+                    continue
+
+                non_csv = [n for n in leaf_files if not n.lower().endswith(".csv")]
+                if non_csv:
+                    sample = ", ".join(non_csv[:3])
+                    extra  = "..." if len(non_csv) > 3 else ""
+                    self._enqueue_log(
+                        f"[ERRORE] File non .csv trovati: {sample}{extra}", "error")
+                    all_ok = False
+                    continue
+
+                type_map: dict = {}
+                unknown = []
+                for name in leaf_files:
+                    t = _jira_detect_file_type(name)
+                    if t not in self._INVOICE_TYPES:
+                        unknown.append(name)
+                    else:
+                        type_map.setdefault(t, []).append(name)
+
+                if unknown:
+                    sample = ", ".join(unknown[:3])
+                    extra  = "..." if len(unknown) > 3 else ""
+                    self._enqueue_log(
+                        f"[ERRORE] File non riconosciuti o tipo non ammesso: {sample}{extra}", "error")
+                    all_ok = False
+                    continue
+
+                if len(type_map) > 1:
+                    self._enqueue_log(
+                        f"[ERRORE] Tipologie miste non ammesse: "
+                        f"{', '.join(sorted(type_map.keys()))}", "error")
+                    all_ok = False
+                    continue
+
+                tipo  = next(iter(type_map))
+                count = len(leaf_files)
+
+                # Somma importi e raccoglie reference dallo ZIP
+                total        = 0.0
+                references   = set()
+                parse_errors = []
+                with _zf.ZipFile(entry_path, "r") as z:
+                    for name in leaf_files:
+                        try:
+                            content = z.read(name).decode("utf-8")
+                            lines   = content.splitlines()
+                            if lines:
+                                parts = lines[0].split(";")
+                                total += float(parts[3])
+                            for line in lines[1:]:
+                                stripped = line.strip()
+                                if not stripped:
+                                    continue
+                                upper = stripped.upper()
+                                if upper.startswith("EB") or upper.startswith("GB"):
+                                    references.add(stripped.split(";")[0])
+                        except Exception:
+                            parse_errors.append(name)
+
+            else:
+                # ── Validazione cartella ──────────────────────────────────
+                folder_path = entry_path
+
+                subdirs = [x for x in folder_path.iterdir() if x.is_dir()]
+                if subdirs:
+                    names = ", ".join(s.name for s in subdirs[:3])
+                    extra = "..." if len(subdirs) > 3 else ""
+                    self._enqueue_log(
+                        f"[ERRORE] Sottocartelle non ammesse: {names}{extra}", "error")
+                    all_ok = False
+                    continue
+
+                files = [x for x in folder_path.iterdir() if x.is_file()]
+                if not files:
+                    self._enqueue_log("[ERRORE] Cartella vuota.", "error")
+                    all_ok = False
+                    continue
+
+                non_csv = [f.name for f in files if f.suffix.lower() != ".csv"]
+                if non_csv:
+                    sample = ", ".join(non_csv[:3])
+                    extra  = "..." if len(non_csv) > 3 else ""
+                    self._enqueue_log(
+                        f"[ERRORE] File non .csv trovati: {sample}{extra}", "error")
+                    all_ok = False
+                    continue
+
+                type_map: dict = {}
+                unknown = []
+                for f in files:
+                    t = _jira_detect_file_type(f.name)
+                    if t not in self._INVOICE_TYPES:
+                        unknown.append(f.name)
+                    else:
+                        type_map.setdefault(t, []).append(f.name)
+
+                if unknown:
+                    sample = ", ".join(unknown[:3])
+                    extra  = "..." if len(unknown) > 3 else ""
+                    self._enqueue_log(
+                        f"[ERRORE] File non riconosciuti o tipo non ammesso: {sample}{extra}", "error")
+                    all_ok = False
+                    continue
+
+                if len(type_map) > 1:
+                    self._enqueue_log(
+                        f"[ERRORE] Tipologie miste non ammesse: "
+                        f"{', '.join(sorted(type_map.keys()))}", "error")
+                    all_ok = False
+                    continue
+
+                tipo  = next(iter(type_map))
+                count = len(files)
+
+                total        = 0.0
+                references   = set()
+                parse_errors = []
+                for f in files:
+                    try:
+                        lines = f.read_text(encoding="utf-8").splitlines()
+                        if lines:
+                            parts = lines[0].split(";")
+                            total += float(parts[3])
+                        for line in lines[1:]:
+                            stripped = line.strip()
+                            if not stripped:
+                                continue
+                            upper = stripped.upper()
+                            if upper.startswith("EB") or upper.startswith("GB"):
+                                references.add(stripped.split(";")[0])
+                    except Exception:
+                        parse_errors.append(f.name)
+
+            if parse_errors:
+                sample = ", ".join(parse_errors[:3])
+                extra  = "..." if len(parse_errors) > 3 else ""
+                self._enqueue_log(
+                    f"[WARN] Impossibile leggere: {sample}{extra}", "warn")
+
+            self._enqueue_log(
+                f"[OK] Tipo: {tipo}  |  {count} file  |  "
+                f"Totale: {total:.2f}  |  Reference distinte: {len(references)}", "ok")
+
+            # Query Kraken: cerca le reference via query invoice (ELEC + GAS)
+            if references:
+                self._enqueue_log("[INFO] Connessione HUB per recupero query...", "info")
+                try:
+                    _reload_env()
+                    hub_conn = get_hub_connection()
+                    lista_identifier = ", ".join(f"'{r}'" for r in references)
+                    try:
+                        query_elec = load_query_from_hub_identifier(
+                            hub_conn, "query_invoice_elec.sql", lista_identifier)
+                        query_gas  = load_query_from_hub_identifier(
+                            hub_conn, "query_invoice_gas.sql",  lista_identifier)
+                    finally:
+                        hub_conn.close()
+
+                    self._enqueue_log("[INFO] Connessione Kraken in corso...", "info")
+                    kraken_conn = get_kraken_connection()
+                    try:
+                        found        = set()
+                        kraken_total = 0.0
+                        for label, query in [("ELEC", query_elec), ("GAS", query_gas)]:
+                            if not query:
+                                self._enqueue_log(
+                                    f"[WARN] Query {label} non trovata su HUB.", "warn")
+                                continue
+                            wrapped = (
+                                f"SELECT sub.identifier, "
+                                f"(sub.template_vars_json::json#>>\'{{sumup,gross_amount}}\')::numeric AS gross_amount "
+                                f"FROM ({query}) sub"
+                            )
+                            cur = kraken_conn.cursor()
+                            cur.execute(wrapped)
+                            for row in cur.fetchall():
+                                identifier, gross = row[0], row[1]
+                                if identifier:
+                                    found.add(identifier)
+                                if gross is not None:
+                                    try:
+                                        kraken_total += float(gross)
+                                    except (TypeError, ValueError):
+                                        pass
+                            cur.close()
+                    finally:
+                        kraken_conn.close()
+
+                    missing = references - found
+                    if missing:
+                        self._enqueue_log(
+                            f"[ERRORE] Trovate su Kraken: {len(found)}/{len(references)}  |  "
+                            f"Mancanti: {len(missing)}", "error")
+                        all_ok = False
+                    else:
+                        self._enqueue_log(
+                            f"[OK] Trovate su Kraken: {len(found)}/{len(references)}", "ok")
+
+                    # Confronto totali
+                    if abs(kraken_total - total) < 0.01:
+                        self._enqueue_log(
+                            f"[OK] Totale Kraken: {kraken_total:.2f}  |  "
+                            f"Totale file: {total:.2f}  |  Corrispondono", "ok")
+                    else:
+                        self._enqueue_log(
+                            f"[ERRORE] Totale Kraken: {kraken_total:.2f}  |  "
+                            f"Totale file: {total:.2f}  |  Differenza: {abs(kraken_total - total):.2f}",
+                            "error")
+                        all_ok = False
+                except Exception as e:
+                    self._enqueue_log(f"[ERRORE] {e}", "error")
+                    all_ok = False
+
+        self.after(0, lambda: self._on_done(success=all_ok))
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # SHELL — Finestra principale con sidebar verticale
@@ -11300,6 +11841,14 @@ _APPS = [
         "size":    (960, 660),
         "class":   None,
     },
+    {
+        "key":     "validator",
+        "icon":    "✅",
+        "label":   "Validator",
+        "minsize": (700, 520),
+        "size":    (960, 640),
+        "class":   None,
+    },
 ]
 
 def _apply_dark_titlebar(hwnd, bg_hex: str = "#0f1117"):
@@ -11347,6 +11896,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         _APPS[11]["class"] = CsvBlankHeaderRemover
         _APPS[12]["class"] = InvoiceWriter
         _APPS[13]["class"] = HubFilterUpdater
+        _APPS[14]["class"] = FileValidator
 
         # Impedisce sleep, screensaver e spegnimento display
         # finché il tool è aperto (Windows only, silenzioso su altri OS)
@@ -12293,7 +12843,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
 
         _SB_GROUPS = [
             ("db",   "🗄", "DATABASE", ["hubconsole", "hub", "kraken", "analysis", "delta", "bonifica", "hfupdater"]),
-            ("file", "📁", "FILE",     ["cleaner", "mover", "zipper", "ppfilter", "csvremover", "invoicewriter"]),
+            ("file", "📁", "FILE",     ["cleaner", "mover", "zipper", "ppfilter", "csvremover", "invoicewriter", "validator"]),
             ("jira", "🎫", "JIRA",     ["jira"]),
         ]
         self._group_frames  = {}

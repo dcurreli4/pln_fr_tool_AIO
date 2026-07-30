@@ -24,6 +24,7 @@ Doppio clic su `HUB Tool - All-in-one.pyw` (nessuna console). Le dipendenze manc
 | **Jira Ticket Creator** | Crea ticket Jira da template JSON riutilizzabili |
 | **CSV Blank Header Remover** | Rimuove colonne con header vuoto da file CSV |
 | **Invoice Writer** | Genera fatture da dati CSV secondo template configurabili |
+| **Validator** | Valida file di fatture (Invoice) e pagamenti (Payment): controlla struttura, tipo, importi e presenza su Kraken |
 
 ## Configurazione
 

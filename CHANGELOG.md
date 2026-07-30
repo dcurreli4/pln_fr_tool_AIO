@@ -1,3 +1,8 @@
+### v1.6.0 — 2026-07-30
+- **Validator**: nuova sezione FILE — validatore di file con due modalità (Invoice, Payment)
+- **Validator — Invoice**: valida cartelle e ZIP (KF, KR, KM, KK); controlla struttura, tipo file, assenza di mix tipologie; somma gli importi dalle testate; conta le reference distinte; verifica presenza su Kraken via query invoice (ELEC + GAS) e confronta il totale gross_amount
+- **Validator**: drag & drop per cartelle e file ZIP; percorsi persistiti in `input/validator/folders.txt`
+
 ### v1.5.5 — 2026-07-24
 - **ZIP Folder**: aggiunta drop zone drag & drop per aggiungere cartelle trascinandole direttamente
 - **ZIP Folder**: apertura automatica cartella output nell'esplora risorse al termine della compressione
