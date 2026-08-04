@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.6"
+VERSION_LAUNCHER = "1.6.7"
 
 
 _REQUIRED = {
@@ -371,8 +371,8 @@ SETTINGS_TABS = [
             ("JIRA_PASSWORD", "Password",  True),
         ]),
     ]),
-    ("💳  Payment Plans Filter", [
-        ("Impostazioni", [
+    ("💳  File Filter", [
+        ("Payment Plans", [
             ("PP_OUTPUT_SUBFOLDER",  "Sottocartella output",  False),
             ("PP_ZIP_FILENAME",      "Nome ZIP",              False),
             ("PP_AGREEMENT_ID_COL",  "Agreement ID col",      False),
@@ -380,6 +380,13 @@ SETTINGS_TABS = [
             ("PP_SUPPLY_CODE_COL",   "Supply Code col",       False),
             ("PP_PLAN_TYPE_ID_COL",  "Plan Type ID col",      False),
             ("PP_PROGRESS_INTERVAL", "Intervallo progresso",  False),
+        ]),
+        ("Payments", [
+            ("PAY_OUTPUT_SUBFOLDER", "Sottocartella output",  False),
+            ("PAY_ZIP_FILENAME",     "Nome ZIP",              False),
+            ("PAY_COL_REFERENCE",    "Reference col",         False),
+            ("PAY_COL_AMOUNT",       "Amount col",            False),
+            ("PAY_COL_PAYMENT_DATE", "Payment Date col",      False),
         ]),
     ]),
 ]
@@ -6650,7 +6657,7 @@ def pp_run_pipeline(cfg_data, log_fn, on_done):
         out_sub      = cfg_data["output_subfolder"]
         out_path     = Path(out_sub)
         output_folder = out_path if out_path.is_absolute() else input_folder / out_sub
-        zip_out_dir  = _HERE / "output" / "payment plans filter"
+        zip_out_dir  = _HERE / "output" / "file filter" / "payment plans filter"
         zip_out_dir.mkdir(parents=True, exist_ok=True)
         zip_path     = zip_out_dir / cfg_data["zip_filename"]
         filter_file   = _PP_FILTER_FILES.get(cfg_data["filter_key"],
@@ -6754,6 +6761,219 @@ def pp_run_pipeline(cfg_data, log_fn, on_done):
         else:
             log_fn("[WARN] Nessun file da comprimere.", "warn")
 
+        _sh.rmtree(output_folder, ignore_errors=True)
+
+        log_fn("\n[INFO] Completato con successo.", "ok")
+        on_done(success=True)
+    except Exception as e:
+        log_fn(f"\n[ERRORE CRITICO] {e}", "error")
+        on_done(success=False)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PAYMENT FILTER (sotto-tab "Payment" di File Filter)
+# ════════════════════════════════════════════════════════════════════════════
+
+_PAY_BASE                      = _HERE / "input" / "file filter" / "payment"
+_PAY_FILTER_FILE_SIMPLE        = _PAY_BASE / "filter_payment_reference.txt"
+_PAY_FILTER_FILE_COMPOSITE     = _PAY_BASE / "filter_payment_key_ref_date_type.txt"
+_PAY_DEFAULTS = {
+    "PAY_OUTPUT_SUBFOLDER": "output",
+    "PAY_ZIP_FILENAME":     "payment.zip",
+    "PAY_FILTER_MODE":      "key_ref_date_type",
+    "PAY_DEBUG_KEYS":       "false",
+    "PAY_COL_REFERENCE":    "12",
+    "PAY_COL_AMOUNT":       "8",
+    "PAY_COL_PAYMENT_DATE": "9",
+}
+
+
+def _pay_get(key):
+    return _read_env_raw().get(key, _PAY_DEFAULTS.get(key, ""))
+
+
+def _pay_format_header_amount(value):
+    return f"{value:.2f}".replace(".", ",")
+
+
+def _pay_build_key(columns, cfg):
+    reference = columns[cfg["col_reference"]]
+    if cfg["filter_mode"] != "key_ref_date_type":
+        return reference
+    payment_date = columns[cfg["col_payment_date"]].replace("-", "")
+    amount_raw   = columns[cfg["col_amount"]].replace(",", ".")
+    try:
+        amount_val = float(amount_raw)
+    except ValueError:
+        amount_val = 0.0
+    if amount_val < 0:
+        tag = "REJECT"
+    elif amount_val > 0:
+        tag = "PAYMENT"
+    else:
+        tag = ""
+    return f"R{reference}D{payment_date}T{tag}"
+
+
+def _pay_process_file(input_path, filter_set, output_path, cfg, log_fn):
+    """Ritorna (kept_count, kept_sum, total_rows). Se kept_count == 0, nessun
+    file di output viene scritto."""
+    debug_keys  = cfg.get("debug_keys", False)
+    debug_limit = 15
+    try:
+        with input_path.open("r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+
+        if not lines:
+            return 0, 0.0, 0
+
+        header = lines[0]
+        footer = None
+        body   = lines[1:]
+        if body and body[-1].endswith(";END"):
+            footer = body[-1]
+            body   = body[:-1]
+
+        output_lines   = []
+        sum_amount     = 0.0
+        total_rows     = 0
+        total_kept     = 0
+        debug_printed  = 0
+
+        for line in body:
+            if not line.strip():
+                continue
+            columns = line.split(";")
+            total_rows += 1
+
+            try:
+                key = _pay_build_key(columns, cfg)
+            except IndexError:
+                log_fn(f"[WARN] {input_path.name} — riga con colonne insufficienti ignorata", "warn")
+                continue
+
+            if debug_keys and debug_printed < debug_limit:
+                match_str = "MATCH" if key in filter_set else "no match"
+                log_fn(f"    [debug] chiave generata: '{key}' -> {match_str}", "info")
+                debug_printed += 1
+
+            if key in filter_set:
+                try:
+                    amount_val = float(columns[cfg["col_amount"]].replace(",", "."))
+                except (ValueError, IndexError):
+                    amount_val = 0.0
+                sum_amount += amount_val
+                output_lines.append(line)
+                total_kept += 1
+
+        if total_kept == 0:
+            log_fn(f"[INFO] {input_path.name} — tutte le righe filtrate, saltata.", "info")
+            return 0, 0.0, total_rows
+
+        header_columns = header.split(";")
+        if len(header_columns) >= 4:
+            header_columns[3] = _pay_format_header_amount(sum_amount)
+            header_columns[1] = str(total_kept)
+
+        output_lines.insert(0, ";".join(header_columns))
+        if footer:
+            output_lines.append(footer)
+
+        output_path.write_text("\n".join(output_lines), encoding="utf-8", newline="\n")
+        log_fn(
+            f"[OK] {input_path.name}  →  "
+            f"{total_rows} originali / {total_kept} mantenuti", "ok")
+        return total_kept, sum_amount, total_rows
+    except Exception as e:
+        log_fn(f"[ERRORE] {input_path.name}: {e}", "error")
+        return 0, 0.0, 0
+
+
+def pay_run_pipeline(cfg_data, log_fn, on_done):
+    try:
+        import shutil as _sh, re as _re
+        input_folder = Path(cfg_data["input_folder"]).resolve()
+        out_sub       = cfg_data["output_subfolder"]
+        out_path      = Path(out_sub)
+        output_folder = out_path if out_path.is_absolute() else input_folder / out_sub
+        zip_out_dir   = _HERE / "output" / "file filter" / "payment"
+        zip_out_dir.mkdir(parents=True, exist_ok=True)
+        zip_path      = zip_out_dir / cfg_data["zip_filename"]
+
+        if not input_folder.is_dir():
+            log_fn(f"[ERRORE] Cartella input non trovata: {input_folder}", "error")
+            on_done(success=False); return
+        filter_file = (_PAY_FILTER_FILE_SIMPLE
+                       if cfg_data.get("filter_mode") == "reference"
+                       else _PAY_FILTER_FILE_COMPOSITE)
+        if not filter_file.is_file():
+            log_fn(f"[ERRORE] File filtro non trovato: {filter_file}", "error")
+            on_done(success=False); return
+
+        if output_folder.exists():
+            _sh.rmtree(output_folder)
+        output_folder.mkdir(parents=True)
+        log_fn(f"[INFO] Cartella output: {output_folder}", "info")
+
+        filter_set = set()
+        with filter_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if s:
+                    filter_set.add(s)
+        log_fn(f"[INFO] Filtro caricato: {len(filter_set)} chiavi", "info")
+
+        _PAY_PAT = _re.compile(
+            r'^K[EG]_[A-Z0-9]{2}_([A-Z]_\d{10}|BC\d+|BU_\d+)_\d{8}\.csv$',
+            _re.IGNORECASE)
+        csv_files_all = sorted(input_folder.glob("*.csv"))
+        csv_files = [f for f in csv_files_all if _PAY_PAT.match(f.name)]
+        skipped_names = [f.name for f in csv_files_all if not _PAY_PAT.match(f.name)]
+        if skipped_names:
+            log_fn(f"[WARN] {len(skipped_names)} file ignorati (nome non riconosciuto): "
+                   f"{', '.join(skipped_names[:3])}{'…' if len(skipped_names) > 3 else ''}", "warn")
+        if not csv_files:
+            log_fn("[ERRORE] Nessun file CSV Payments valido trovato.", "error")
+            on_done(success=False); return
+
+        _B2C_PAT = _re.compile(r'^K[EG]_[A-Z0-9]{2}_[A-Z]_\d{10}_\d{8}\.csv$', _re.IGNORECASE)
+        _B2B_files = [f.name for f in csv_files if not _B2C_PAT.match(f.name)]
+        if _B2B_files:
+            log_fn(f"[ERRORE] File B2B non supportati (solo B2C per ora): "
+                   f"{', '.join(_B2B_files[:3])}{'…' if len(_B2B_files) > 3 else ''}", "error")
+            on_done(success=False); return
+
+        log_fn(f"\n[INFO] File da elaborare: {len(csv_files)}", "info")
+        total_kept_all = 0
+        total_sum_all  = 0.0
+        files_written  = 0
+
+        for csv_path in csv_files:
+            kept, kept_sum, _total = _pay_process_file(
+                csv_path, filter_set, output_folder / csv_path.name, cfg_data, log_fn)
+            total_kept_all += kept
+            total_sum_all  += kept_sum
+            if kept > 0:
+                files_written += 1
+
+        output_files = [f for f in output_folder.rglob("*") if f.is_file()]
+        log_fn("\n── Riepilogo ──", "section")
+        log_fn(f"[INFO] File generati: {files_written} su {len(csv_files)} analizzati", "info")
+        log_fn(f"[INFO] Pagamenti trovati post filtro: {total_kept_all}", "info")
+        log_fn(f"[INFO] Somma amount post filtro: {_pay_format_header_amount(total_sum_all)}", "info")
+
+        if output_files:
+            import zipfile as _zf_pay
+            log_fn(f"\n[INFO] ZIP: {zip_path.name} ...", "info")
+            with _zf_pay.ZipFile(zip_path, "w", _zf_pay.ZIP_DEFLATED, compresslevel=1) as zf:
+                for file in output_files:
+                    zf.write(file, file.relative_to(output_folder))
+            log_fn(f"[OK] ZIP creato: {zip_path}", "ok")
+        else:
+            log_fn("[WARN] Nessun file da comprimere.", "warn")
+
+        _sh.rmtree(output_folder, ignore_errors=True)
+
         log_fn("\n[INFO] Completato con successo.", "ok")
         on_done(success=True)
     except Exception as e:
@@ -6769,10 +6989,14 @@ class PaymentPlansFilter(_AppBase):
         self._running       = False
         self._filter_trees  = {}
         self._filter_counts = {}
+        self._pay_log_queue = queue.Queue()
+        self._pay_running    = False
         self._build_ui()
         self._load_fields()
         self._load_all_filters()
+        self._load_pay_filter()
         self._poll_log()
+        self._poll_pay_log()
 
     def _build_ui(self):
         self._status_var = tkinter.StringVar(value="Pronto.")
@@ -6780,14 +7004,47 @@ class PaymentPlansFilter(_AppBase):
         self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
                                   font=("Consolas", 9), anchor="w", pady=5)
         self._status_lbl.pack(fill="x", padx=24, side="bottom")
+        self._init_pp_styles()
         self._build_notebook([
             ("▶  Pipeline",      self._build_pipeline_tab),
             ("🔍  Filtro",       self._build_filter_tab),
         ])
 
+    def _init_pp_styles(self):
+        style = ttk.Style()
+        style.configure("PPFilter.Treeview",
+                        background=BG_CARD, foreground=TEXT_PRI,
+                        fieldbackground=BG_CARD, rowheight=26,
+                        font=("Consolas", 10), borderwidth=0)
+        style.configure("PPFilter.Treeview.Heading",
+                        background=BG_CARD2, foreground=ACCENT,
+                        font=("Consolas", 9, "bold"), relief="flat")
+        style.map("PPFilter.Treeview",
+                  background=[("selected", ACCENT2)],
+                  foreground=[("selected", TEXT_PRI)])
+        style.configure("PPSub.TNotebook",
+                        background=BG, borderwidth=0, tabmargins=[0, 0, 0, 0])
+        style.configure("PPSub.TNotebook.Tab",
+                        background=BG_CARD, foreground=TEXT_SEC,
+                        font=("Consolas", 9), padding=[12, 2], borderwidth=0)
+        style.map("PPSub.TNotebook.Tab",
+                  background=[("selected", ACCENT2), ("!selected", BG_CARD)],
+                  foreground=[("selected", TEXT_PRI), ("!selected", TEXT_SEC)],
+                  padding=[("selected", [12, 5]), ("!selected", [12, 2])])
+
     # ── Tab Pipeline ──────────────────────────────────────────────────────
 
     def _build_pipeline_tab(self, parent):
+        sub_nb = ttk.Notebook(parent, style="PPSub.TNotebook")
+        sub_nb.pack(fill="both", expand=True)
+        pp_tab = Frame(sub_nb, bg=BG)
+        sub_nb.add(pp_tab, text="  Payment Plans  ")
+        self._build_payment_plans_subtab(pp_tab)
+        pay_tab = Frame(sub_nb, bg=BG)
+        sub_nb.add(pay_tab, text="  Payments  ")
+        self._build_payment_subtab(pay_tab)
+
+    def _build_payment_plans_subtab(self, parent):
         body = Frame(parent, bg=BG)
         body.pack(fill="both", expand=True)
 
@@ -6833,6 +7090,28 @@ class PaymentPlansFilter(_AppBase):
 
         browse_btn.bind("<Button-1>", _browse_input)
         self._input_lbl.bind("<Button-1>", _browse_input)
+
+        dz_frame = Frame(top, bg=BG_CARD)
+        dz_frame.pack(fill="x", padx=8, pady=(0, 4))
+        self._pp_drop_zone = Label(
+            dz_frame,
+            text="\U0001f4c2  Trascina qui la cartella input",
+            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
+            pady=8, cursor="hand2",
+            highlightthickness=1, highlightbackground=BORDER,
+        )
+        self._pp_drop_zone.pack(fill="x")
+        self._pp_drop_zone.bind("<Button-1>", _browse_input)
+        self._pp_drop_zone.bind("<Enter>",
+            lambda e: self._pp_drop_zone.configure(highlightbackground=ACCENT))
+        self._pp_drop_zone.bind("<Leave>",
+            lambda e: self._pp_drop_zone.configure(highlightbackground=BORDER))
+        if _HAS_DND:
+            try:
+                self._pp_drop_zone.drop_target_register(_DND_FILES)
+                self._pp_drop_zone.dnd_bind("<<Drop>>", self._on_pp_dnd_drop)
+            except Exception:
+                pass
 
         row2 = Frame(top, bg=BG_CARD)
         row2.pack(fill="x", padx=14, pady=(0, 8))
@@ -6894,30 +7173,157 @@ class PaymentPlansFilter(_AppBase):
         log_frame.pack(fill="both", expand=True)
         self._build_log_panel(log_frame, on_clear=self._clear_log)
 
+    def _build_payment_subtab(self, parent):
+        body = Frame(parent, bg=BG)
+        body.pack(fill="both", expand=True)
+
+        top = Frame(body, bg=BG_CARD, bd=0, highlightthickness=1,
+                    highlightbackground=BORDER)
+        top.pack(fill="x", pady=(0, 8))
+
+        hdr = Frame(top, bg=BG_CARD)
+        hdr.pack(fill="x")
+        Label(hdr, text="ESECUZIONE", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
+
+        def _icon_btn(symbol, command, color=ACCENT, tip=""):
+            lbl = Label(hdr, text=symbol, bg=BG_CARD, fg=color,
+                        font=("Consolas", 14), cursor="hand2", padx=10, pady=6)
+            lbl.bind("<Button-1>", lambda e: command())
+            lbl.bind("<Enter>",    lambda e: (lbl.configure(bg=BG_HOVER),
+                                              self._status_var.set(tip) if tip else None))
+            lbl.bind("<Leave>",    lambda e: (lbl.configure(bg=BG_CARD),
+                                              self._status_var.set("Pronto.")))
+            return lbl
+
+        self._pay_btn = _icon_btn("▶", self._pay_start, ACCENT, "Avvia pipeline")
+        self._pay_btn.pack(side="right", padx=(0, 8))
+        Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
+
+        row1 = Frame(top, bg=BG_CARD)
+        row1.pack(fill="x", padx=14, pady=(8, 4))
+        Label(row1, text="Cartella input:", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 9), width=14, anchor="w").pack(side="left")
+        browse_btn = Label(row1, text="\U0001f4c1", bg=BG_CARD, fg=TEXT_SEC,
+                           font=("Consolas", 11), cursor="hand2", padx=4)
+        browse_btn.pack(side="left")
+        self._pay_input_lbl = Label(row1, text="—", bg=BG_CARD, fg=ACCENT,
+                                font=("Consolas", 9), anchor="w")
+        self._pay_input_lbl.pack(side="left", fill="x", expand=True)
+
+        def _browse_input(e=None):
+            folder = filedialog.askdirectory(title="Seleziona cartella input")
+            if folder:
+                _write_env({"PAY_INPUT_FOLDER": folder})
+                self._update_pay_input_label()
+
+        browse_btn.bind("<Button-1>", _browse_input)
+        self._pay_input_lbl.bind("<Button-1>", _browse_input)
+
+        dz_frame = Frame(top, bg=BG_CARD)
+        dz_frame.pack(fill="x", padx=8, pady=(0, 4))
+        self._pay_drop_zone = Label(
+            dz_frame,
+            text="\U0001f4c2  Trascina qui la cartella input",
+            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
+            pady=8, cursor="hand2",
+            highlightthickness=1, highlightbackground=BORDER,
+        )
+        self._pay_drop_zone.pack(fill="x")
+        self._pay_drop_zone.bind("<Button-1>", _browse_input)
+        self._pay_drop_zone.bind("<Enter>",
+            lambda e: self._pay_drop_zone.configure(highlightbackground=ACCENT))
+        self._pay_drop_zone.bind("<Leave>",
+            lambda e: self._pay_drop_zone.configure(highlightbackground=BORDER))
+        if _HAS_DND:
+            try:
+                self._pay_drop_zone.drop_target_register(_DND_FILES)
+                self._pay_drop_zone.dnd_bind("<<Drop>>", self._on_pay_dnd_drop)
+            except Exception:
+                pass
+
+        row2 = Frame(top, bg=BG_CARD)
+        row2.pack(fill="x", padx=14, pady=(0, 8))
+        Label(row2, text="Chiave filtro:", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 9), width=14, anchor="w").pack(side="left")
+        self._pay_mode_var = tkinter.StringVar()
+        mode_btn = Frame(row2, bg=BG_INPUT, highlightthickness=1,
+                       highlightbackground=BORDER, cursor="hand2")
+        mode_btn.pack(side="left")
+        mode_lbl = Label(mode_btn, textvariable=self._pay_mode_var, bg=BG_INPUT, fg=TEXT_PRI,
+                       font=("Consolas", 9), padx=10, pady=4, width=32, anchor="w")
+        mode_lbl.pack(side="left")
+        Label(mode_btn, text="▾", bg=BG_INPUT, fg=TEXT_SEC,
+              font=("Consolas", 9), padx=6).pack(side="left")
+
+        _PAY_MODE_OPTIONS = ["Reference", "Reference + Data + Tipo (P/R)"]
+        _PAY_MODE_MAP     = {"Reference": "reference",
+                              "Reference + Data + Tipo (P/R)": "key_ref_date_type"}
+        _PAY_MODE_MAP_INV = {v: k for k, v in _PAY_MODE_MAP.items()}
+
+        def _open_mode_menu(e=None):
+            menu = tkinter.Menu(self, tearoff=0, bg=BG_CARD2, fg=TEXT_PRI,
+                                activebackground=ACCENT2, activeforeground=TEXT_PRI,
+                                font=("Consolas", 9), bd=0, relief="flat")
+            for opt in _PAY_MODE_OPTIONS:
+                menu.add_command(label=opt, command=lambda o=opt: (
+                    self._pay_mode_var.set(o),
+                    _write_env({"PAY_FILTER_MODE": _PAY_MODE_MAP.get(o, o)})))
+            menu.post(mode_btn.winfo_rootx(),
+                      mode_btn.winfo_rooty() + mode_btn.winfo_height())
+
+        mode_btn.bind("<Button-1>", _open_mode_menu)
+        mode_lbl.bind("<Button-1>", _open_mode_menu)
+        self._pay_mode_map_inv = _PAY_MODE_MAP_INV
+        mode = _pay_get("PAY_FILTER_MODE") or "key_ref_date_type"
+        self._pay_mode_var.set(_PAY_MODE_MAP_INV.get(mode, "Reference + Data + Tipo (P/R)"))  # noqa: E501
+
+        # Debug chiavi
+        row3 = Frame(top, bg=BG_CARD)
+        row3.pack(fill="x", padx=14, pady=(0, 10))
+        self._pay_debug_var = tkinter.BooleanVar(
+            value=_pay_get("PAY_DEBUG_KEYS").lower() == "true")
+        self._pay_debug_box = Label(row3,
+                              text="☑" if self._pay_debug_var.get() else "☐",
+                              bg=BG_CARD,
+                              fg=ACCENT if self._pay_debug_var.get() else TEXT_SEC,
+                              font=("Consolas", 12), cursor="hand2", width=2)
+        self._pay_debug_box.pack(side="left", padx=(0, 6))
+        debug_lbl = Label(row3, text="Debug chiavi (stampa chiavi generate e match nel log)",
+                        bg=BG_CARD, fg=TEXT_PRI, font=("Consolas", 10),
+                        cursor="hand2")
+        debug_lbl.pack(side="left")
+
+        def _toggle_debug(e=None):
+            val = not self._pay_debug_var.get()
+            self._pay_debug_var.set(val)
+            self._pay_debug_box.configure(text="☑" if val else "☐",
+                                    fg=ACCENT if val else TEXT_SEC)
+            _write_env({"PAY_DEBUG_KEYS": "true" if val else "false"})
+
+        self._pay_debug_box.bind("<Button-1>", _toggle_debug)
+        debug_lbl.bind("<Button-1>", _toggle_debug)
+        row3.bind("<Button-1>", _toggle_debug)
+
+        log_frame = Frame(body, bg=BG_CARD, bd=0, highlightthickness=1,
+                          highlightbackground=BORDER)
+        log_frame.pack(fill="both", expand=True)
+        self._build_pay_log_panel(log_frame, on_clear=self._pay_clear_log)
+        self._update_pay_input_label()
+
     # ── Tab Filtro ────────────────────────────────────────────────────────
 
     def _build_filter_tab(self, parent):
-        style = ttk.Style()
-        style.configure("PPFilter.Treeview",
-                        background=BG_CARD, foreground=TEXT_PRI,
-                        fieldbackground=BG_CARD, rowheight=26,
-                        font=("Consolas", 10), borderwidth=0)
-        style.configure("PPFilter.Treeview.Heading",
-                        background=BG_CARD2, foreground=ACCENT,
-                        font=("Consolas", 9, "bold"), relief="flat")
-        style.map("PPFilter.Treeview",
-                  background=[("selected", ACCENT2)],
-                  foreground=[("selected", TEXT_PRI)])
-        style.configure("PPSub.TNotebook",
-                        background=BG, borderwidth=0, tabmargins=[0, 0, 0, 0])
-        style.configure("PPSub.TNotebook.Tab",
-                        background=BG_CARD, foreground=TEXT_SEC,
-                        font=("Consolas", 9), padding=[12, 2], borderwidth=0)
-        style.map("PPSub.TNotebook.Tab",
-                  background=[("selected", ACCENT2), ("!selected", BG_CARD)],
-                  foreground=[("selected", TEXT_PRI), ("!selected", TEXT_SEC)],
-                  padding=[("selected", [12, 5]), ("!selected", [12, 2])])
+        sub_nb = ttk.Notebook(parent, style="PPSub.TNotebook")
+        sub_nb.pack(fill="both", expand=True)
+        pp_tab = Frame(sub_nb, bg=BG)
+        sub_nb.add(pp_tab, text="  Payment Plans  ")
+        self._build_filter_payment_plans_subtab(pp_tab)
+        pay_tab = Frame(sub_nb, bg=BG)
+        sub_nb.add(pay_tab, text="  Payments  ")
+        self._build_filter_payment_subtab(pay_tab)
 
+    def _build_filter_payment_plans_subtab(self, parent):
         sub_nb = ttk.Notebook(parent, style="PPSub.TNotebook")
         sub_nb.pack(fill="both", expand=True)
         for internal_key, label in _PP_FILTER_LABELS.items():
@@ -6961,6 +7367,69 @@ class PaymentPlansFilter(_AppBase):
 
         count_var = tkinter.StringVar(value="")
         self._filter_counts[internal_key] = count_var
+        Label(parent, textvariable=count_var, bg=BG, fg=TEXT_SEC,
+              font=("Consolas", 9), anchor="w",
+              pady=4).pack(fill="x", padx=16)
+
+    def _build_filter_payment_subtab(self, parent):
+        sub_nb = ttk.Notebook(parent, style="PPSub.TNotebook")
+        sub_nb.pack(fill="both", expand=True)
+
+        tab_simple = Frame(sub_nb, bg=BG)
+        sub_nb.add(tab_simple, text="  Reference  ")
+        self._build_pay_filter_key_tab(
+            tab_simple, "Reference",
+            attr_tree="_pay_filter_tree_simple",
+            attr_count="_pay_filter_count_var_simple",
+            paste_cmd=self._pay_filter_paste_popup_simple,
+            clear_cmd=self._pay_filter_clear_all_simple,
+        )
+
+        tab_composite = Frame(sub_nb, bg=BG)
+        sub_nb.add(tab_composite, text="  Reference + Data + Tipo (P/R)  ")
+        self._build_pay_filter_key_tab(
+            tab_composite, "Reference + Data + Tipo (P/R)",
+            attr_tree="_pay_filter_tree_composite",
+            attr_count="_pay_filter_count_var_composite",
+            paste_cmd=self._pay_filter_paste_popup_composite,
+            clear_cmd=self._pay_filter_clear_all_composite,
+        )
+
+    def _build_pay_filter_key_tab(self, parent, label, attr_tree, attr_count,
+                                   paste_cmd, clear_cmd):
+        hdr = Frame(parent, bg=BG)
+        hdr.pack(fill="x", padx=16, pady=(12, 0))
+        Label(hdr, text=label, bg=BG, fg=TEXT_PRI,
+              font=("Consolas", 11, "bold")).pack(side="left")
+        Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(8, 0))
+        Label(parent, text="Ogni riga rappresenta una chiave da mantenere nel filtraggio.",
+              bg=BG, fg=TEXT_SEC, font=("Consolas", 9), anchor="w",
+              pady=6).pack(fill="x", padx=16)
+
+        toolbar = Frame(parent, bg=BG)
+        toolbar.pack(fill="x", padx=16, pady=(0, 6))
+        self._make_btn(toolbar, "✏️  Modifica / Aggiungi",
+                       paste_cmd, color=SUCCESS).pack(side="left", padx=(0, 6))
+        self._make_btn(toolbar, "\U0001f5d1  Svuota righe",
+                       clear_cmd, color=ERROR).pack(side="left")
+
+        table_frame = Frame(parent, bg=BG_CARD,
+                            highlightthickness=1, highlightbackground=BORDER)
+        table_frame.pack(fill="both", expand=True, padx=16, pady=(0, 4))
+
+        tree = ttk.Treeview(table_frame, columns=("id",), show="headings",
+                            style="PPFilter.Treeview", selectmode="browse")
+        tree.heading("id", text="Chiave Filtro")
+        tree.column("id", width=500, minwidth=200, anchor="w")
+        vsb = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview,
+                            style="Dark.Vertical.TScrollbar")
+        vsb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=vsb.set)
+        tree.pack(fill="both", expand=True)
+        setattr(self, attr_tree, tree)
+
+        count_var = tkinter.StringVar(value="")
+        setattr(self, attr_count, count_var)
         Label(parent, textvariable=count_var, bg=BG, fg=TEXT_SEC,
               font=("Consolas", 9), anchor="w",
               pady=4).pack(fill="x", padx=16)
@@ -7128,12 +7597,194 @@ class PaymentPlansFilter(_AppBase):
         except Exception as e:
             messagebox.showerror("Errore salvataggio filtro", str(e))
 
+    # \u2500\u2500 Filtro Payment helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    def _load_pay_filter(self):
+        self._load_pay_filter_for(
+            "_pay_filter_tree_simple",    "_pay_filter_count_var_simple",
+            _PAY_FILTER_FILE_SIMPLE)
+        self._load_pay_filter_for(
+            "_pay_filter_tree_composite", "_pay_filter_count_var_composite",
+            _PAY_FILTER_FILE_COMPOSITE)
+
+    def _load_pay_filter_for(self, attr_tree, attr_count, filter_file):
+        tree = getattr(self, attr_tree, None)
+        if not tree:
+            return
+        for row in tree.get_children():
+            tree.delete(row)
+        count_var = getattr(self, attr_count)
+        if not filter_file.exists():
+            count_var.set("File non trovato.")
+            return
+        lines = filter_file.read_text(encoding="utf-8").strip().splitlines()
+        count = 0
+        for line in lines:
+            line = line.strip()
+            if line:
+                tree.insert("", "end", values=(line,))
+                count += 1
+        count_var.set(f"{count} chiavi caricate.")
+
+    def _pay_filter_paste_popup_simple(self):
+        self._pay_filter_paste_popup_for(
+            "_pay_filter_tree_simple", "_pay_filter_count_var_simple",
+            _PAY_FILTER_FILE_SIMPLE, "Reference")
+
+    def _pay_filter_paste_popup_composite(self):
+        self._pay_filter_paste_popup_for(
+            "_pay_filter_tree_composite", "_pay_filter_count_var_composite",
+            _PAY_FILTER_FILE_COMPOSITE, "Reference + Data + Tipo (P/R)")
+
+    def _pay_filter_paste_popup_for(self, attr_tree, attr_count, filter_file, label):
+        tree      = getattr(self, attr_tree)
+        count_var = getattr(self, attr_count)
+        W, H = 500, 420
+        popup = tkinter.Toplevel(self)
+        popup.title(f"Modifica / Aggiungi \u2014 {label}")
+        popup.configure(bg=BG)
+        popup.resizable(False, False)
+        popup.grab_set()
+        popup.update_idletasks()
+        x = (popup.winfo_screenwidth()  - W) // 2
+        y = (popup.winfo_screenheight() - H) // 2
+        popup.geometry(f"{W}x{H}+{x}+{y}")
+
+        Label(popup, text=f"Modifica / Aggiungi \u2014 {label}",
+              bg=BG, fg=TEXT_PRI, font=("Consolas", 11, "bold"), pady=12).pack()
+        Label(popup, text="Una chiave per riga. Righe vuote verranno ignorate.",
+              bg=BG, fg=TEXT_SEC, font=("Consolas", 9), justify="center").pack()
+        Frame(popup, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(8, 0))
+
+        btn_row = Frame(popup, bg=BG)
+        btn_row.pack(side="bottom", fill="x", padx=16, pady=12)
+        tkinter.Button(btn_row, text="Annulla", bg=BG_CARD, fg=TEXT_SEC,
+                       activebackground=BG_HOVER, activeforeground=TEXT_PRI,
+                       font=("Consolas", 10, "bold"), relief="flat",
+                       cursor="hand2", pady=6, padx=14, bd=0,
+                       command=popup.destroy).pack(side="right", padx=(6, 0))
+        btn_conferma = tkinter.Button(btn_row, text="\u2713  Conferma",
+                                      bg=ACCENT, fg="#ffffff",
+                                      activebackground="#3a7ee8",
+                                      activeforeground="#ffffff",
+                                      font=("Consolas", 10, "bold"),
+                                      relief="flat", cursor="hand2",
+                                      pady=6, padx=14, bd=0)
+        btn_conferma.pack(side="right")
+
+        feedback_var = tkinter.StringVar(value="")
+        Label(popup, textvariable=feedback_var, bg=BG, fg=WARNING,
+              font=("Consolas", 9), pady=4).pack(side="bottom", fill="x", padx=16)
+
+        txt_frame = Frame(popup, bg=BG_CARD)
+        txt_frame.pack(fill="both", expand=True, padx=16, pady=(8, 0))
+        vsb = ttk.Scrollbar(txt_frame, style="Dark.Vertical.TScrollbar")
+        vsb.pack(side="right", fill="y")
+        txt = tkinter.Text(txt_frame, bg=BG_INPUT, fg=TEXT_PRI,
+                           font=("Consolas", 10), relief="flat", bd=0,
+                           insertbackground=TEXT_PRI, wrap="none",
+                           padx=8, pady=6, yscrollcommand=vsb.set)
+        txt.pack(fill="both", expand=True)
+        vsb.config(command=txt.yview)
+        txt.focus_set()
+
+        existing = [tree.item(iid, "values")[0] for iid in tree.get_children()]
+        if existing:
+            txt.insert("1.0", "\n".join(existing))
+
+        import re as _re
+        if filter_file == _PAY_FILTER_FILE_COMPOSITE:
+            _key_re = _re.compile(r'^R.+D\d{8}T(PAYMENT|REJECT|)$')
+            def _validate(k): return bool(_key_re.match(k)) and ' ' not in k
+            _fmt_hint = "Formato atteso: R{ref}D{YYYYMMDD}T{PAYMENT|REJECT|\"\"}"
+        else:
+            _key_re = _re.compile(r'^[A-Za-z0-9]+$')
+            def _validate(k): return bool(_key_re.match(k))
+            _fmt_hint = "Solo lettere e cifre (niente spazi, - _ o altri caratteri speciali)"
+
+        def _on_conferma():
+            raw = txt.get("1.0", "end").strip().splitlines()
+            stripped = [line.strip() for line in raw if line.strip()]
+            if not stripped:
+                feedback_var.set("\u26a0  Nessuna chiave trovata.")
+                return
+            invalid = [k for k in stripped if not _validate(k)]
+            if invalid:
+                sample = ", ".join(invalid[:3]) + ("\u2026" if len(invalid) > 3 else "")
+                feedback_var.set(f"\u26a0  {len(invalid)} chiave/i non valida/e: {sample} \u2014 {_fmt_hint}")
+                return
+            tree.delete(*tree.get_children())
+            for v in stripped:
+                tree.insert("", "end", values=(v,))
+            count_var.set(f"{len(stripped)} chiavi.")
+            self._save_pay_filter_for(attr_tree, filter_file)
+            popup.destroy()
+
+        btn_conferma.config(command=_on_conferma)
+
+    def _pay_filter_clear_all_simple(self):
+        self._pay_filter_clear_all_for(
+            "_pay_filter_tree_simple", "_pay_filter_count_var_simple",
+            _PAY_FILTER_FILE_SIMPLE)
+
+    def _pay_filter_clear_all_composite(self):
+        self._pay_filter_clear_all_for(
+            "_pay_filter_tree_composite", "_pay_filter_count_var_composite",
+            _PAY_FILTER_FILE_COMPOSITE)
+
+    def _pay_filter_clear_all_for(self, attr_tree, attr_count, filter_file):
+        tree      = getattr(self, attr_tree)
+        count_var = getattr(self, attr_count)
+        if not tree.get_children():
+            return
+        if messagebox.askyesno("Svuota filtro", "Rimuovere tutte le chiavi?"):
+            tree.delete(*tree.get_children())
+            count_var.set("0 chiavi.")
+            self._save_pay_filter_for(attr_tree, filter_file)
+
+    def _save_pay_filter_for(self, attr_tree, filter_file):
+        tree = getattr(self, attr_tree)
+        rows = [tree.item(iid, "values")[0] for iid in tree.get_children()
+                if tree.item(iid, "values")]
+        try:
+            filter_file.parent.mkdir(parents=True, exist_ok=True)
+            filter_file.write_text(("\n".join(rows) + "\n") if rows else "",
+                                   encoding="utf-8")
+            self._status_var.set(
+                f"\u2713 {filter_file.name} salvato ({len(rows)} chiavi).")
+        except Exception as e:
+            messagebox.showerror("Errore salvataggio filtro", str(e))
+
     # ── Fields / config ───────────────────────────────────────────────────
 
     def _load_fields(self):
         fk = _pp_get("PP_FILTER_KEY") or "agreement_id"
         self._fk_var.set(_PP_FILTER_KEY_MAP_INV.get(fk, "Agreement ID"))
         self._update_input_label()
+
+    def _on_pp_dnd_drop(self, event):
+        import re
+        paths = [p[0] or p[1] for p in re.findall(r'\{([^}]+)\}|(\S+)', event.data)]
+        dirs = [p.strip() for p in paths if os.path.isdir(p.strip())]
+        if not dirs:
+            return
+        if len(dirs) > 1:
+            messagebox.showwarning("Cartella input", "Trascina una sola cartella.")
+            return
+        _write_env({"PP_INPUT_FOLDER": dirs[0]})
+        self._update_input_label()
+
+    def _on_pay_dnd_drop(self, event):
+        import re
+        paths = [p[0] or p[1] for p in re.findall(r'\{([^}]+)\}|(\S+)', event.data)]
+        dirs = [p.strip() for p in paths if os.path.isdir(p.strip())]
+        if not dirs:
+            return
+        if len(dirs) > 1:
+            messagebox.showwarning("Cartella input", "Trascina una sola cartella.")
+            return
+        _write_env({"PAY_INPUT_FOLDER": dirs[0]})
+        self._update_pay_input_label()
 
     def _update_input_label(self):
         val = _pp_get("PP_INPUT_FOLDER").strip()
@@ -7160,8 +7811,14 @@ class PaymentPlansFilter(_AppBase):
         env = _read_env_raw()
         input_folder = env.get("PP_INPUT_FOLDER", "").strip()
         if not input_folder:
-            messagebox.showwarning(
-                "Input mancante", "Seleziona la cartella di input prima di avviare.")
+            self._enqueue_log("[ERRORE] Seleziona la cartella di input prima di avviare.", "error")
+            return
+        _folder = Path(input_folder)
+        if not _folder.is_dir():
+            self._enqueue_log(f"[ERRORE] Cartella non trovata: {input_folder}", "error")
+            return
+        if not list(_folder.glob("K[EG]_PP_*.csv")):
+            self._enqueue_log("[ERRORE] La cartella non contiene file Payment Plans (KE_PP_ / KG_PP_).", "error")
             return
         self._running = True
         self._btn.configure(fg=TEXT_SEC, cursor="arrow")
@@ -7181,6 +7838,137 @@ class PaymentPlansFilter(_AppBase):
         threading.Thread(
             target=pp_run_pipeline,
             args=(cfg, self._enqueue_log, self._on_done),
+            daemon=True,
+        ).start()
+
+    # ── Pipeline Payment ────────────────────────────────────────────────────
+
+    def _update_pay_input_label(self):
+        val = _pay_get("PAY_INPUT_FOLDER").strip()
+        if val and len(val) > 55:
+            display = "…" + val[-52:]
+        else:
+            display = val if val else "—"
+        self._pay_input_lbl.configure(text=display,
+                                  fg=ACCENT if val else TEXT_SEC)
+
+    def _build_pay_log_panel(self, parent, on_clear=None):
+        hdr = Frame(parent, bg=BG_CARD)
+        hdr.pack(fill="x")
+        Label(hdr, text="OUTPUT LOG", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
+        if on_clear:
+            icon = Label(hdr, text="🗑", bg=BG_CARD, fg=TEXT_SEC,
+                         font=("Consolas", 11), cursor="hand2", padx=10)
+            icon.bind("<Button-1>", lambda e: on_clear())
+            icon.bind("<Enter>",    lambda e: icon.configure(fg=ERROR))
+            icon.bind("<Leave>",    lambda e: icon.configure(fg=TEXT_SEC))
+            icon.pack(side="right")
+        Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=14)
+
+        lf = Frame(parent, bg=BG_CARD)
+        lf.pack(fill="both", expand=True, padx=4, pady=4)
+        log_vsb = ttk.Scrollbar(lf, style="Dark.Vertical.TScrollbar")
+        log_vsb.pack(side="right", fill="y")
+
+        def _log_scroll_set(first, last):
+            if float(first) <= 0.0 and float(last) >= 1.0:
+                if log_vsb.winfo_ismapped():
+                    log_vsb.pack_forget()
+            else:
+                if not log_vsb.winfo_ismapped():
+                    log_vsb.pack(side="right", fill="y")
+            log_vsb.set(first, last)
+        self._pay_log_box = Text(
+            lf, bg=BG_CARD, fg=TEXT_PRI, font=("Consolas", 10),
+            insertbackground=ACCENT, relief="flat", bd=0,
+            yscrollcommand=_log_scroll_set, state="disabled",
+            wrap="word", padx=10, pady=6, selectbackground=ACCENT2,
+        )
+        self._pay_log_box.pack(side="left", fill="both", expand=True)
+        log_vsb.config(command=self._pay_log_box.yview)
+
+        self._pay_log_box.tag_configure("ok",      foreground=SUCCESS)
+        self._pay_log_box.tag_configure("error",   foreground=ERROR)
+        self._pay_log_box.tag_configure("warn",    foreground=WARNING)
+        self._pay_log_box.tag_configure("info",    foreground=TEXT_SEC)
+        self._pay_log_box.tag_configure("section", foreground=ACCENT,
+                                    font=("Consolas", 10, "bold"))
+
+    def _pay_clear_log(self):
+        self._pay_log_box.configure(state="normal")
+        self._pay_log_box.delete("1.0", "end")
+        self._pay_log_box.configure(state="disabled")
+
+    def _pay_enqueue_log(self, message: str, level: str = "info"):
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        stripped = message.lstrip("\n")
+        prefix   = message[: len(message) - len(stripped)]
+        if stripped:
+            self._pay_log_queue.put((f"{prefix}[{ts}] {stripped}", level))
+        else:
+            self._pay_log_queue.put((message, level))
+
+    def _poll_pay_log(self):
+        try:
+            while True:
+                msg, level = self._pay_log_queue.get_nowait()
+                self._pay_log_box.configure(state="normal")
+                self._pay_log_box.insert("end", msg + "\n", level)
+                self._pay_log_box.see("end")
+                self._pay_log_box.configure(state="disabled")
+        except queue.Empty:
+            pass
+        self.after(80, self._poll_pay_log)
+
+    def _pay_on_done(self, success):
+        self._pay_running = False
+        color = SUCCESS if success else ERROR
+        self._status_var.set(
+            "✓ Completato con successo." if success else "✗ Terminato con errori.")
+        self._pay_btn.configure(fg=color, cursor="hand2")
+        self.after(3000, lambda: self._pay_btn.configure(fg=ACCENT))
+
+    def _pay_start(self):
+        if self._pay_running:
+            return
+        env = _read_env_raw()
+        input_folder = env.get("PAY_INPUT_FOLDER", "").strip()
+        if not input_folder:
+            self._pay_enqueue_log("[ERRORE] Seleziona la cartella di input prima di avviare.", "error")
+            return
+        _folder = Path(input_folder)
+        if not _folder.is_dir():
+            self._pay_enqueue_log(f"[ERRORE] Cartella non trovata: {input_folder}", "error")
+            return
+        import re as _re_chk
+        _PAY_CHK = _re_chk.compile(
+            r'^K[EG]_[A-Z0-9]{2}_([A-Z]_\d{10}|BC\d+|BU_\d+)_\d{8}\.csv$',
+            _re_chk.IGNORECASE)
+        if not any(_PAY_CHK.match(f.name) for f in _folder.glob("*.csv")):
+            self._pay_enqueue_log(
+                "[ERRORE] La cartella non contiene file Payments validi "
+                "(B2C: K[EG]_XX_X_NNNNNNNNNN_YYYYMMDD, "
+                "B2B: K[EG]_XX_BCN_YYYYMMDD, "
+                "Allocation: K[EG]_XX_BU_N_YYYYMMDD).", "error")
+            return
+        self._pay_running = True
+        self._pay_btn.configure(fg=TEXT_SEC, cursor="arrow")
+        self._status_var.set("In esecuzione...")
+        cfg = {
+            "input_folder":      input_folder,
+            "output_subfolder":  env.get("PAY_OUTPUT_SUBFOLDER", "output"),
+            "zip_filename":      env.get("PAY_ZIP_FILENAME", "payment.zip"),
+            "filter_mode":       env.get("PAY_FILTER_MODE", "key_ref_date_type"),
+            "debug_keys":        env.get("PAY_DEBUG_KEYS", "false").lower() == "true",
+            "col_reference":     int(env.get("PAY_COL_REFERENCE", "12")),
+            "col_amount":        int(env.get("PAY_COL_AMOUNT", "8")),
+            "col_payment_date":  int(env.get("PAY_COL_PAYMENT_DATE", "9")),
+        }
+        threading.Thread(
+            target=pay_run_pipeline,
+            args=(cfg, self._pay_enqueue_log, self._pay_on_done),
             daemon=True,
         ).start()
 
@@ -12014,7 +12802,7 @@ _APPS = [
     {
         "key":     "ppfilter",
         "icon":    "💳",
-        "label":   "Payment Plans Filter",
+        "label":   "File Filter",
         "minsize": (820, 580),
         "size":    (960, 680),
         "class":   None,
@@ -12805,7 +13593,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
                  "Le cartelle da comprimere sono elencate in input/zip folder/folders.txt. "
                  "La cartella di output è configurabile dal campo Output nel pannello."),
             ]),
-            ("💳  Payment Plans Filter", [
+            ("💳  File Filter", [
                 ("Cosa fa",
                  "Filtra file CSV (pattern K[EG]_PP_*.csv) mantenendo solo le righe che corrispondono "
                  "agli ID caricati nei file di filtro. Produce i file filtrati in una sottocartella "

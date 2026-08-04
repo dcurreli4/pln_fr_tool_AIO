@@ -1,3 +1,15 @@
+### v1.6.7 — 2026-08-04
+- **File Filter** (ex Payment Plans Filter): rinominata l'etichetta della sezione in "File Filter"; il contenuto della tab "Pipeline" è stato spostato in una sotto-tab "Payment Plans", in preparazione della generalizzazione dello strumento ad altri tipi di file
+- **File Filter**: la cartella `output/` con i CSV filtrati non compressi viene ora eliminata subito dopo la creazione dello ZIP (resta solo lo ZIP finale)
+- **File Filter — Payments**: aggiunta sotto-tab "Payments" (in Pipeline, Filtro e Impostazioni), sorella di "Payment Plans" — filtra CSV di pagamento B2C per chiave "Reference" o "Reference + Data + Tipo (P/R)", ricalcola header (conteggio e somma importi) e produce lo ZIP filtrato
+- **File Filter — Payments**: la tab Filtro ha due sotto-tab distinte ("Reference" e "Reference + Data + Tipo (P/R)"), ognuna con file di persistenza separato (`filter_payment_reference.txt` / `filter_payment_key_ref_date_type.txt`)
+- **File Filter — Payments**: validazione chiavi nel popup modifica — Reference accetta solo `[A-Za-z0-9]`; Reference+Data+Tipo verifica il formato `R{ref}D{YYYYMMDD}T{PAYMENT|REJECT|""}`
+- **File Filter — Payments**: drag & drop per selezionare la cartella input (una sola cartella); stessa funzionalità aggiunta anche a Payment Plans
+- **File Filter — Payments**: al click ▶ verifica che la cartella contenga file B2C validi (pattern `K[EG]_XX_X_NNNNNNNNNN_YYYYMMDD.csv`); file B2B (BC/BU) bloccano con errore; errori loggati nel pannello output senza popup
+- **File Filter — Payments**: fix ricalcolo header — somma importi body in euro (con virgola) e riformatta con 2 decimali e virgola, senza moltiplicazioni/divisioni
+- **File Filter — Payment Plans**: output ZIP spostato in `output/file filter/payment plans filter/`
+- **File Filter — Payment Plans**: al click ▶ verifica che la cartella contenga file `KE_PP_` / `KG_PP_`; errori loggati nel pannello output senza popup
+
 ### v1.6.6 — 2026-07-30
 - **Payment Plans Filter**: generato file `output/payment plans filter/recovered_ids/recovered_ids.txt` con la lista degli agreement ID distinti mantenuti dal filtro
 
