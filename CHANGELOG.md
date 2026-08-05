@@ -1,3 +1,7 @@
+### v1.6.8 — 2026-08-05
+- **File Filter — Payments / Payment Plans**: al termine del run con successo si apre automaticamente la cartella output in Esplora risorse
+- **Popup migrazione .env**: altezza dinamica in base al numero di nuove variabili; testo su più righe leggibile; singolare/plurale corretto ("1 nuova variabile" / "N nuove variabili")
+
 ### v1.6.7 — 2026-08-04
 - **File Filter** (ex Payment Plans Filter): rinominata l'etichetta della sezione in "File Filter"; il contenuto della tab "Pipeline" è stato spostato in una sotto-tab "Payment Plans", in preparazione della generalizzazione dello strumento ad altri tipi di file
 - **File Filter**: la cartella `output/` con i CSV filtrati non compressi viene ora eliminata subito dopo la creazione dello ZIP (resta solo lo ZIP finale)

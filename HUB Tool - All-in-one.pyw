@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.7"
+VERSION_LAUNCHER = "1.6.8"
 
 
 _REQUIRED = {
@@ -7804,6 +7804,11 @@ class PaymentPlansFilter(_AppBase):
             "\u2713 Completato con successo." if success else "\u2717 Terminato con errori.")
         self._btn.configure(fg=color, cursor="hand2")
         self.after(3000, lambda: self._btn.configure(fg=ACCENT))
+        if success:
+            try:
+                os.startfile(str(_HERE / "output" / "file filter" / "payment plans filter"))
+            except Exception:
+                pass
 
     def _start(self):
         if self._running:
@@ -7929,6 +7934,11 @@ class PaymentPlansFilter(_AppBase):
             "✓ Completato con successo." if success else "✗ Terminato con errori.")
         self._pay_btn.configure(fg=color, cursor="hand2")
         self.after(3000, lambda: self._pay_btn.configure(fg=ACCENT))
+        if success:
+            try:
+                os.startfile(str(_HERE / "output" / "file filter" / "payment"))
+            except Exception:
+                pass
 
     def _pay_start(self):
         if self._pay_running:
@@ -14260,7 +14270,8 @@ if __name__ == "__main__":
             popup.configure(bg=BG)
             popup.resizable(False, False)
             popup.grab_set()
-            W, H = 460, 210
+            W = 480
+            H = 220 + max(0, len(_new_keys) - 2) * 20
             x = app.winfo_x() + (app.winfo_width()  - W) // 2
             y = app.winfo_y() + (app.winfo_height() - H) // 2
             popup.geometry(f"{W}x{H}+{x}+{y}")
@@ -14273,8 +14284,10 @@ if __name__ == "__main__":
             _tk.Label(inner, text="Nuove impostazioni rilevate",
                       bg=BG, fg=TEXT_PRI, font=("Consolas", 12, "bold")).pack(pady=(18, 4))
             _tk.Label(inner,
-                      text=f"Questo aggiornamento ha introdotto {len(_new_keys)} nuova/e variabile/i\n"
-                           f"nel file di configurazione. Compilale per usare le nuove funzionalità.",
+                      text=f"Questo aggiornamento ha introdotto "
+                           f"{'1 nuova variabile' if len(_new_keys) == 1 else f'{len(_new_keys)} nuove variabili'}\n"
+                           f"nel file di configurazione.\n"
+                           f"{'Compilala' if len(_new_keys) == 1 else 'Compilale'} per usare le nuove funzionalità.",
                       bg=BG, fg=TEXT_SEC, font=("Consolas", 9), justify="center").pack(pady=(0, 4))
 
             keys_text = "  •  " + "\n  •  ".join(_new_keys)
