@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.8"
+VERSION_LAUNCHER = "1.6.9"
 
 
 _REQUIRED = {
@@ -4325,7 +4325,8 @@ class BonificaProd(_AppBase):
                         start_date     = at.start_date,
                         end_date       = at.end_date,
                         agreement_type = at.agreement_type,
-                        action         = at.action
+                        action         = at.action,
+                        urn            = at.urn
                     FROM z_bonifiche_agreement_from_test at
                     WHERE a.agreement_id = at.agreement_id
                     AND a.agreement_id IS NOT NULL

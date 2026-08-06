@@ -1,3 +1,6 @@
+### v1.6.9 — 2026-08-06
+- **Bonifica PROD — Agreement**: l'UPDATE degli agreement esistenti aggiorna ora anche il campo `urn`
+
 ### v1.6.8 — 2026-08-05
 - **File Filter — Payments / Payment Plans**: al termine del run con successo si apre automaticamente la cartella output in Esplora risorse
 - **Popup migrazione .env**: altezza dinamica in base al numero di nuove variabili; testo su più righe leggibile; singolare/plurale corretto ("1 nuova variabile" / "N nuove variabili")
