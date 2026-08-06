@@ -21,7 +21,7 @@ Doppio clic su `HUB Tool - All-in-one.pyw` (nessuna console). Le dipendenze manc
 | **Folder Mover** | Sposta cartelle o file secondo regole definite |
 | **ZIP Folder** | Comprime cartelle in archivi ZIP |
 | **File Filter** | Filtra piani di pagamento per agreement ID, tipo piano o PRM/Kraken — output ZIP |
-| **Jira Ticket Creator** | Crea ticket Jira da template JSON riutilizzabili |
+| **Jira Ticket Creator** | Crea ticket Jira da template JSON riutilizzabili; supporta modalità `.cfg` con assegnatari configurabili, autocomplete utenti via API Jira e recap copiabile a fine creazione |
 | **CSV Blank Header Remover** | Rimuove colonne con header vuoto da file CSV |
 | **Invoice Writer** | Genera fatture da dati CSV secondo template configurabili |
 | **Validator** | Valida file di fatture (Invoice) e pagamenti (Payment): controlla struttura, tipo, importi e presenza su Kraken |

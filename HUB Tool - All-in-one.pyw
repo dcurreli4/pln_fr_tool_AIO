@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.9"
+VERSION_LAUNCHER = "1.6.10"
 
 
 _REQUIRED = {
@@ -369,6 +369,9 @@ SETTINGS_TABS = [
             ("JIRA_URL",      "URL",       False),
             ("JIRA_USERNAME", "Username",  False),
             ("JIRA_PASSWORD", "Password",  True),
+        ]),
+        ("Opzioni", [
+            ("JIRA_VALIDATE_INVOICE", "Valida invoice su HUB", "bool"),
         ]),
     ]),
     ("💳  File Filter", [
@@ -10797,7 +10800,7 @@ class JiraTicketCreator(_AppBase):
         self._build_log_panel(right, on_clear=self._clear_log)
         paned.add(right, stretch="never", minsize=160)
 
-        self.after(100, lambda: paned.sash_place(0, int(paned.winfo_width() * 0.68), 0))
+        self.after(100, lambda: paned.sash_place(0, int(paned.winfo_width() * 0.50), 0))
 
     def _build_single_view(self):
         pass  # non usato
@@ -11114,7 +11117,7 @@ class JiraTicketCreator(_AppBase):
         # ── Card Dettagli ticket ──────────────────────────────────────────
         def _det_extra(hdr):
             btn_frame = Frame(hdr, bg=BG_CARD2)
-            btn_frame.pack(side="right", padx=8)
+            btn_frame.pack(side="right", padx=(8, 4))
             self._make_btn(btn_frame, "⬇  Importa", self._on_importa,
                            color=TEXT_SEC).pack(side="left", padx=(0, 4))
             self._make_btn(btn_frame, "📄  Template", self._open_template_menu,
@@ -11196,19 +11199,79 @@ class JiraTicketCreator(_AppBase):
                       relief="flat", font=("Consolas", 10),
                       highlightthickness=1, highlightbackground=BORDER)
         self._entry_assegn.pack(side="left", fill="x", expand=True, ipady=4)
-        self._btn_valida_assegn = self._make_btn(assegn_row, "Valida",
-                                                  self._on_valida_assegnatario,
-                                                  color=TEXT_SEC)
-        self._btn_valida_assegn.pack(side="left", padx=(4, 0))
-        self._btn_valida_assegn.configure(fg=TEXT_SEC, cursor="arrow")
 
-        def _toggle_valida(*_):
-            if self._assegn_var.get().strip():
-                self._btn_valida_assegn.configure(fg=ACCENT, cursor="hand2")
-            else:
-                self._btn_valida_assegn.configure(fg=TEXT_SEC, cursor="arrow")
+        # ── Autocomplete assegnatario ─────────────────────────────────────
+        _assegn_ac_popup  = {"win": None}
+        _assegn_ac_after  = {"id": None}
 
-        self._assegn_var.trace_add("write", _toggle_valida)
+        def _assegn_ac_close():
+            if _assegn_ac_popup["win"] and _assegn_ac_popup["win"].winfo_exists():
+                _assegn_ac_popup["win"].destroy()
+            _assegn_ac_popup["win"] = None
+
+        def _assegn_ac_pick(username):
+            _assegn_ac_close()
+            self._assegn_var.set(username)
+
+        def _assegn_ac_show(results):
+            _assegn_ac_close()
+            win = tkinter.Toplevel(self._entry_assegn)
+            win.overrideredirect(True)
+            win.configure(bg=BORDER)
+            _assegn_ac_popup["win"] = win
+            x = self._entry_assegn.winfo_rootx()
+            y = self._entry_assegn.winfo_rooty() + self._entry_assegn.winfo_height()
+            win.geometry(f"+{x}+{y}")
+            for uname in results:
+                lbl = tkinter.Label(win, text=uname, bg=BG_CARD2, fg=TEXT_PRI,
+                                    font=("Consolas", 10), anchor="w",
+                                    cursor="hand2", padx=8, pady=4)
+                lbl.pack(fill="x", pady=1)
+                lbl.bind("<Enter>",    lambda e, l=lbl: l.configure(bg=BG_HOVER))
+                lbl.bind("<Leave>",    lambda e, l=lbl: l.configure(bg=BG_CARD2))
+                lbl.bind("<Button-1>", lambda e, u=uname: _assegn_ac_pick(u))
+            win.bind("<FocusOut>", lambda e: _assegn_ac_close())
+
+        def _assegn_ac_search(query):
+            _assegn_ac_close()
+            if len(query) < 2:
+                return
+            env_r = _read_env_raw()
+            url   = env_r.get("JIRA_URL", "").strip().rstrip("/")
+            user  = env_r.get("JIRA_USERNAME", "").strip()
+            pw    = env_r.get("JIRA_PASSWORD", "")
+            if not url or not user:
+                return
+            def _worker(q=query, u=url, usr=user, p=pw):
+                try:
+                    import requests as _req
+                    from requests.auth import HTTPBasicAuth
+                    r = _req.get(
+                        f"{u}/rest/api/2/user/search",
+                        params={"username": q, "maxResults": 8},
+                        auth=HTTPBasicAuth(usr, p),
+                        verify=False, timeout=6)
+                    if not r.ok:
+                        return
+                    results = [x.get("name", "") for x in r.json() if x.get("name")]
+                    if results:
+                        self._entry_assegn.after(0, lambda res=results: _assegn_ac_show(res))
+                except Exception:
+                    pass
+            import threading as _thr
+            _thr.Thread(target=_worker, daemon=True).start()
+
+        def _assegn_on_keyrelease(e):
+            if e.keysym in ("Return", "Escape", "Tab", "Up", "Down"):
+                return
+            if _assegn_ac_after["id"]:
+                self._entry_assegn.after_cancel(_assegn_ac_after["id"])
+            q = self._assegn_var.get().strip()
+            _assegn_ac_after["id"] = self._entry_assegn.after(300, lambda: _assegn_ac_search(q))
+
+        self._entry_assegn.bind("<KeyRelease>", _assegn_on_keyrelease)
+        self._entry_assegn.bind("<Escape>",     lambda e: _assegn_ac_close())
+        # ── Fine autocomplete assegnatario ────────────────────────────────
 
         # ── Card Descrizione ──────────────────────────────────────────────
         desc_card = Frame(inner, bg=BG_CARD, highlightthickness=1,
@@ -11262,8 +11325,8 @@ class JiraTicketCreator(_AppBase):
         self._att_count_var = tkinter.StringVar(value="")
         Label(att_hdr, textvariable=self._att_count_var, bg=BG_CARD2,
               fg=TEXT_SEC, font=("Consolas", 8)).pack(side="left")
-        btn_rm_all = Label(att_hdr, text="✕  Rimuovi tutti", bg=BG_CARD2,
-                           fg=ERROR, font=("Consolas", 9), cursor="hand2",
+        btn_rm_all = Label(att_hdr, text="🗑", bg=BG_CARD2,
+                           fg=ERROR, font=("Consolas", 11), cursor="hand2",
                            padx=10)
         btn_rm_all.pack(side="right")
         btn_rm_all.bind("<Button-1>", lambda e: self._remove_attachments())
@@ -11352,7 +11415,8 @@ class JiraTicketCreator(_AppBase):
         self._title_var.set(f"Accounting- Copy file to entr\u00e9e folder - {data}")
         self._tipo_var.set("T\u00e2che")
         self._prio_var.set("Major [2]")
-        self._assegn_var.set("alain.bellon")
+        _cfg_default_assegn = _read_env_raw().get("JIRA_CFG_ASSIGNEES_DEFAULT", "").strip() or "alain.bellon"
+        self._assegn_var.set(_cfg_default_assegn)
         self._desc_text.delete("1.0", tkinter.END)
         self._desc_text.insert("1.0", desc)
 
@@ -11380,9 +11444,6 @@ class JiraTicketCreator(_AppBase):
             w.unbind("<Enter>")
             w.unbind("<Leave>")
 
-        # Blocca bottone Valida assegnatario
-        self._btn_valida_assegn.configure(fg=TEXT_SEC, cursor="arrow")
-        self._btn_valida_assegn.bind("<Button-1>", lambda e: "break")
 
     def _cfg_unlock_fields(self):
         """Svuota i campi e li rende nuovamente modificabili."""
@@ -11431,10 +11492,6 @@ class JiraTicketCreator(_AppBase):
             for child in dd.winfo_children():
                 child.bind("<Button-1>", _open_fn)
 
-        # Sblocca bottone Valida assegnatario
-        self._btn_valida_assegn.configure(fg=ACCENT, cursor="hand2")
-        self._btn_valida_assegn.bind("<Button-1>",
-            lambda e: self._on_valida_assegnatario())
 
     def _build_template_tab(self, parent):
         canvas, inner = self._jira_scrollable(parent)
@@ -11839,54 +11896,6 @@ class JiraTicketCreator(_AppBase):
 
     # ── Crea ticket ───────────────────────────────────────────────────────
 
-    def _on_valida_assegnatario(self):
-        username = self._assegn_var.get().strip()
-        if not username:
-            return  # bottone disabilitato, non dovrebbe arrivare qui
-        if not self._username_var.get() or not self._password_var.get():
-            self._assegn_result_var.set("⚠  Credenziali non configurate. Vai in Impostazioni → Jira.")
-            self._assegn_result_lbl.configure(fg=WARNING)
-            return
-        self._assegn_result_var.set("⏳ Verifica...")
-        self._assegn_result_lbl.configure(fg=TEXT_PRI)
-        self._btn_valida_assegn.configure(fg=TEXT_SEC, cursor="arrow")
-        threading.Thread(target=self._valida_assegn_worker, args=(username,), daemon=True).start()
-
-    def _valida_assegn_worker(self, username):
-        try:
-            import requests as _req
-            from requests.auth import HTTPBasicAuth
-            url  = self._url_var.get().strip().rstrip("/")
-            auth = HTTPBasicAuth(self._username_var.get().strip(),
-                                 self._password_var.get())
-            r = _req.get(f"{url}/rest/api/2/user/search",
-                         params={"username": username, "maxResults": 5},
-                         auth=auth, verify=_JIRA_VERIFY_SSL, timeout=10)
-            if not r.ok:
-                self.after(0, self._assegn_result, False,
-                           f"Errore API ({r.status_code})")
-                return
-            results = r.json()
-            match = next((u for u in results
-                          if u.get("name", "").lower() == username.lower()), None)
-            if match:
-                display = match.get("displayName", username)
-                self.after(0, self._assegn_result, True,
-                           f"✓  {display}")
-            elif results:
-                names = ", ".join(u.get("name", "") for u in results[:3])
-                self.after(0, self._assegn_result, False,
-                           f"✗  Non trovato. Simili: {names}")
-            else:
-                self.after(0, self._assegn_result, False,
-                           "✗  Nessun utente trovato.")
-        except Exception as e:
-            self.after(0, self._assegn_result, False, f"Errore: {e}")
-
-    def _assegn_result(self, ok, msg):
-        self._btn_valida_assegn.configure(fg=ACCENT, cursor="hand2")
-        self._assegn_result_var.set(msg)
-        self._assegn_result_lbl.configure(fg=SUCCESS if ok else WARNING)
 
     def _on_debug(self):
         """Simula creazione ticket senza chiamare Jira — mostra il .cfg nel log."""
@@ -11955,8 +11964,12 @@ class JiraTicketCreator(_AppBase):
                         self._enqueue_log("\n".join(lines), "info")
 
                     # Validazione invoice vs HUB
-                    self._enqueue_log("[DEBUG] Validazione invoice su HUB...", "info")
-                    _jira_validate_invoice_hub(zip_paths, self._enqueue_log)
+                    _validate_inv = os.getenv("JIRA_VALIDATE_INVOICE", "true").lower() not in {"false", "0", "no", "n"}
+                    if _validate_inv:
+                        self._enqueue_log("[DEBUG] Validazione invoice su HUB...", "info")
+                        _jira_validate_invoice_hub(zip_paths, self._enqueue_log)
+                    else:
+                        self._enqueue_log("[DEBUG] Validazione invoice su HUB: disabilitata.", "warn")
             else:
                 self._enqueue_log("[DEBUG] .cfg: disabilitato", "info")
 
@@ -11965,6 +11978,11 @@ class JiraTicketCreator(_AppBase):
         threading.Thread(target=_run, daemon=True).start()
 
     def _pulisci(self):
+        if self._cfg_var.get():
+            self._cfg_var.set(False)
+            self._cfg_box.configure(text="\u2610", fg=TEXT_SEC)
+            self._btn_preview_cfg.pack_forget()
+            self._cfg_unlock_fields()
         for var in (self._proj_var, self._title_var, self._assegn_var):
             var.set("")
         self._tipo_var.set("\u2014")
@@ -12010,9 +12028,10 @@ class JiraTicketCreator(_AppBase):
             url  = self._url_var.get().strip().rstrip("/")
             auth = HTTPBasicAuth(self._username_var.get().strip(),
                                  self._password_var.get())
-            headers    = {"Content-Type": "application/json"}
-            atl_h      = {"X-Atlassian-Token": "no-check"}
+            headers      = {"Content-Type": "application/json"}
+            atl_h        = {"X-Atlassian-Token": "no-check"}
             assegnatario = self._assegn_var.get().strip()
+            dir_files    = {}
 
             # ── Step 0: Valida assegnatario ───────────────────────────────
             self._enqueue_log("[INFO] Validazione assegnatario...", "info")
@@ -12054,12 +12073,16 @@ class JiraTicketCreator(_AppBase):
                 self._enqueue_log("[OK] Validazione ZIP superata.", "ok")
 
                 # Validazione invoice vs HUB (processa solo i file KF/KR/KM/KK trovati negli ZIP)
-                self._enqueue_log("[INFO] Validazione invoice su HUB...", "info")
-                hub_ok = _jira_validate_invoice_hub(zip_paths, self._enqueue_log)
-                if not hub_ok:
-                    self.after(0, self._crea_err,
-                               "Validazione invoice fallita — ticket non creato.")
-                    return
+                _validate_inv = os.getenv("JIRA_VALIDATE_INVOICE", "true").lower() not in {"false", "0", "no", "n"}
+                if _validate_inv:
+                    self._enqueue_log("[INFO] Validazione invoice su HUB...", "info")
+                    hub_ok = _jira_validate_invoice_hub(zip_paths, self._enqueue_log)
+                    if not hub_ok:
+                        self.after(0, self._crea_err,
+                                   "Validazione invoice fallita — ticket non creato.")
+                        return
+                else:
+                    self._enqueue_log("[INFO] Validazione invoice su HUB: disabilitata.", "warn")
 
             # ── Step 2: Crea ticket (senza assegnatario) ──────────────────
             payload = {"fields": {
@@ -12107,11 +12130,6 @@ class JiraTicketCreator(_AppBase):
                             dir_files.setdefault(parts[2], 0)
                             dir_files[parts[2]] += count
                             break
-                if dir_files:
-                    lines = ["[INFO] File per cartella destinazione:"]
-                    for target, total in dir_files.items():
-                        lines.append(f"         {target}  →  {total} file")
-                    self._enqueue_log("\n".join(lines), "info")
 
             # ── Step 3: Allega tutti i file in una sola chiamata ──────────
             try:
@@ -12160,14 +12178,25 @@ class JiraTicketCreator(_AppBase):
                     f"[{'OK' if ra.ok else 'WARN'}] Assegnatario: {assegnatario}",
                     "ok" if ra.ok else "warn")
 
-            self.after(0, self._crea_ok, key, f"{url}/browse/{key}")
+            ticket_url = f"{url}/browse/{key}"
+            self.after(0, self._crea_ok, key, ticket_url, dir_files if self._cfg_var.get() else {})
         except Exception as e:
             self.after(0, self._crea_err, str(e))
 
-    def _crea_ok(self, key, url):
+    def _crea_ok(self, key, url, dir_files=None):
         self._btn_crea.configure(fg=ACCENT, cursor="hand2")
         self._status_var.set(f"\u2713 Ticket {key} creato.")
-        self._enqueue_log(f"[OK] Ticket creato: {key}  \u2192  {url}", "ok")
+
+        # \u2500\u2500 Recap copiabile \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        sep = "\u2500" * 34
+        recap_lines = [sep, f"{key}  \u2192  {url}"]
+        if dir_files:
+            recap_lines.append("")
+            for target, total in dir_files.items():
+                recap_lines.append(f"{target}  \u2192  {total} file")
+        recap_lines.append(sep)
+        self._enqueue_log("\n".join(recap_lines), "section")
+
         self._remove_attachments()
 
     def _crea_err(self, msg):
@@ -13394,6 +13423,22 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
                     tkinter.Label(grid, text=label, bg=BG_CARD, fg=TEXT_SEC,
                                   font=("Consolas", 10), anchor="w",
                                   width=22).grid(row=row_i, column=0, sticky="w", pady=4)
+
+                    if is_pw == "bool":
+                        raw_val = _read_env_raw().get(key.split("|")[0], "true")
+                        bvar = tkinter.BooleanVar(value=raw_val.lower() not in {"false", "0", "no", "n"})
+                        def _on_bool_toggle(k=key, v=bvar):
+                            _write_env({k: "true" if v.get() else "false"})
+                            _reload_env()
+                            status_var.set(f"✓ Salvato: {k}")
+                            parent.after(2000, lambda: status_var.set(""))
+                        chk = tkinter.Checkbutton(grid, variable=bvar, command=_on_bool_toggle,
+                                                   bg=BG_CARD, fg=TEXT_PRI, selectcolor=BG_CARD2,
+                                                   activebackground=BG_CARD, activeforeground=TEXT_PRI,
+                                                   relief="flat", bd=0, cursor="hand2")
+                        chk.grid(row=row_i, column=1, sticky="w", pady=4, padx=(8, 0))
+                        continue
+
                     var = tkinter.StringVar(value=_read_env_raw().get(key.split("|")[0], ""))
                     show = "*" if is_pw else ""
                     entry = ttk.Entry(grid, textvariable=var, show=show,
@@ -13481,7 +13526,196 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
                                    activebackground=BG_HOVER,
                                    activeforeground=TEXT_PRI).pack(side="right")
 
-            tkinter.Frame(inner, bg=BG).pack(pady=16)
+            # ── Sezione custom: Assegnatari .cfg (solo tab Jira) ─────────────
+            if tab_label == "🎫  Jira":
+                card_a = tkinter.Frame(inner, bg=BG_CARD, bd=0,
+                                       highlightthickness=1, highlightbackground=BORDER)
+                card_a.pack(fill="x", padx=16, pady=(12, 0))
+                tkinter.Label(card_a, text="Assegnatari .cfg", bg=BG_CARD, fg=ACCENT,
+                              font=("Consolas", 10, "bold"), pady=10, padx=16).pack(fill="x")
+                tkinter.Frame(card_a, bg=BORDER, height=1).pack(fill="x", padx=16)
+
+                list_frame = tkinter.Frame(card_a, bg=BG_CARD)
+                list_frame.pack(fill="x", padx=16, pady=(8, 4))
+
+                # Stato locale
+                _raw       = _read_env_raw()
+                _assignees = [a.strip() for a in _raw.get("JIRA_CFG_ASSIGNEES", "alain.bellon").split(",") if a.strip()]
+                _default   = _raw.get("JIRA_CFG_ASSIGNEES_DEFAULT", "alain.bellon").strip()
+                _default_var = tkinter.StringVar(value=_default)
+
+                row_frames: list = []
+
+                def _save_assignees():
+                    names = [f["name"].get().strip() for f in row_frames if f["name"].get().strip()]
+                    _write_env({
+                        "JIRA_CFG_ASSIGNEES":         ",".join(names) if names else "alain.bellon",
+                        "JIRA_CFG_ASSIGNEES_DEFAULT": _default_var.get(),
+                    })
+                    _reload_env()
+                    status_var.set("✓ Assegnatari salvati")
+                    parent.after(2000, lambda: status_var.set(""))
+
+                def _remove_row(rf):
+                    # Se era il default, resetta al primo rimasto
+                    was_default = (_default_var.get() == rf["name"].get().strip())
+                    rf["frame"].destroy()
+                    row_frames.remove(rf)
+                    if was_default and row_frames:
+                        _default_var.set(row_frames[0]["name"].get().strip())
+                    _save_assignees()
+
+                def _add_row(name="", is_default=False):
+                    rf = {}
+                    row = tkinter.Frame(list_frame, bg=BG_CARD)
+                    row.pack(fill="x", pady=2)
+                    rf["frame"] = row
+
+                    # Entry nome — creata prima del radio per passare name_var al command
+                    name_var = tkinter.StringVar(value=name)
+                    entry = ttk.Entry(row, textvariable=name_var,
+                                      style="Env.TEntry", font=("Consolas", 10), width=28)
+                    rf["name"] = name_var
+
+                    # Radio: usa name_var.get() come value; aggiornato al FocusOut
+                    radio = tkinter.Radiobutton(row, variable=_default_var, value=name,
+                                                bg=BG_CARD, activebackground=BG_CARD,
+                                                selectcolor=ACCENT, relief="flat",
+                                                cursor="hand2",
+                                                command=_save_assignees)
+                    radio.pack(side="left", padx=(0, 4))
+                    rf["radio"] = radio
+
+                    entry.pack(side="left", fill="x", expand=True)
+
+                    # ── Autocomplete Jira ─────────────────────────────────────
+                    _ac_popup   = {"win": None}
+                    _ac_after   = {"id": None}
+
+                    def _ac_close(popup_ref=_ac_popup):
+                        if popup_ref["win"] and popup_ref["win"].winfo_exists():
+                            popup_ref["win"].destroy()
+                        popup_ref["win"] = None
+
+                    def _ac_pick(username, nv=name_var, rb=radio, dv=_default_var,
+                                 popup_ref=_ac_popup):
+                        _ac_close(popup_ref)
+                        nv.set(username)
+                        was_default = (dv.get() == rb["value"])
+                        rb.configure(value=username)
+                        if was_default:
+                            dv.set(""); dv.set(username)
+                        _save_assignees()
+
+                    def _ac_search(query, ent=entry, popup_ref=_ac_popup):
+                        _ac_close(popup_ref)
+                        if len(query) < 2:
+                            return
+                        env_r  = _read_env_raw()
+                        url    = env_r.get("JIRA_URL", "").strip().rstrip("/")
+                        user   = env_r.get("JIRA_USERNAME", "").strip()
+                        pw     = env_r.get("JIRA_PASSWORD", "")
+                        if not url or not user:
+                            return
+                        def _worker(q=query, u=url, usr=user, p=pw,
+                                    ent_=ent, popup_ref_=popup_ref):
+                            try:
+                                import requests as _req
+                                from requests.auth import HTTPBasicAuth
+                                r = _req.get(
+                                    f"{u}/rest/api/2/user/search",
+                                    params={"username": q, "maxResults": 8},
+                                    auth=HTTPBasicAuth(usr, p),
+                                    verify=False, timeout=6)
+                                if not r.ok:
+                                    return
+                                results = [x.get("name", "") for x in r.json() if x.get("name")]
+                                if not results:
+                                    return
+                                ent_.after(0, lambda res=results, e=ent_,
+                                           pr=popup_ref_: _ac_show(res, e, pr))
+                            except Exception:
+                                pass
+                        import threading as _thr
+                        _thr.Thread(target=_worker, daemon=True).start()
+
+                    def _ac_show(results, ent=entry, popup_ref=_ac_popup):
+                        _ac_close(popup_ref)
+                        win = tkinter.Toplevel(ent)
+                        win.overrideredirect(True)
+                        win.configure(bg=BORDER)
+                        popup_ref["win"] = win
+                        x = ent.winfo_rootx()
+                        y = ent.winfo_rooty() + ent.winfo_height()
+                        win.geometry(f"+{x}+{y}")
+                        for uname in results:
+                            lbl = tkinter.Label(win, text=uname, bg=BG_CARD2, fg=TEXT_PRI,
+                                                font=("Consolas", 10), anchor="w",
+                                                cursor="hand2", padx=8, pady=4)
+                            lbl.pack(fill="x", pady=1)
+                            lbl.bind("<Enter>",   lambda e, l=lbl: l.configure(bg=BG_HOVER))
+                            lbl.bind("<Leave>",   lambda e, l=lbl: l.configure(bg=BG_CARD2))
+                            lbl.bind("<Button-1>", lambda e, u=uname: _ac_pick(u))
+                        # Chiude se si clicca fuori
+                        win.bind("<FocusOut>", lambda e: _ac_close(popup_ref))
+
+                    def _on_keyrelease(e, nv=name_var, after_ref=_ac_after):
+                        if e.keysym in ("Return", "Escape", "Tab", "Up", "Down"):
+                            return
+                        if after_ref["id"]:
+                            entry.after_cancel(after_ref["id"])
+                        q = nv.get().strip()
+                        after_ref["id"] = entry.after(300, lambda: _ac_search(q))
+
+                    entry.bind("<KeyRelease>", _on_keyrelease)
+                    entry.bind("<Escape>",     lambda e: _ac_close(_ac_popup))
+                    # ── Fine autocomplete ─────────────────────────────────────
+
+                    def _on_focus_out(*_, nv=name_var, rb=radio, dv=_default_var):
+                        new_name = nv.get().strip()
+                        was_default = (dv.get() == rb["value"])
+                        rb.configure(value=new_name)
+                        if was_default:
+                            dv.set("")
+                            dv.set(new_name)
+                        _save_assignees()
+
+                    entry.bind("<FocusOut>", _on_focus_out)
+                    entry.bind("<Return>",   _on_focus_out)
+
+                    # Bottone rimuovi
+                    del_btn = tkinter.Label(row, text="✕", bg=BG_CARD, fg=ERROR,
+                                            font=("Consolas", 10), cursor="hand2", padx=6)
+                    del_btn.pack(side="left")
+                    del_btn.bind("<Button-1>", lambda e, rf_=rf: _remove_row(rf_))
+
+                    row_frames.append(rf)
+
+                    if is_default:
+                        _default_var.set(name)
+
+                # Popola lista iniziale
+                for a in _assignees:
+                    _add_row(a, is_default=(a == _default))
+                # Forza il radio corretto dopo che tutti i widget sono stati costruiti
+                _default_var.set("")
+                _default_var.set(_default)
+
+                # Bottone aggiungi
+                add_row = tkinter.Frame(card_a, bg=BG_CARD)
+                add_row.pack(fill="x", padx=16, pady=(0, 10))
+                tkinter.Label(add_row, text="◉ = assegnatario di default per ticket cfg", bg=BG_CARD, fg=TEXT_SEC,
+                              font=("Consolas", 8), anchor="w").pack(side="left", fill="x", expand=True)
+                tkinter.Button(add_row, text="＋  Aggiungi",
+                               command=lambda: _add_row(""),
+                               bg=BG_CARD, fg=SUCCESS,
+                               font=("Consolas", 10, "bold"),
+                               relief="flat", cursor="hand2",
+                               padx=10, pady=4, bd=0,
+                               activebackground=BG_HOVER,
+                               activeforeground=TEXT_PRI).pack(side="right")
+
+        tkinter.Frame(inner, bg=BG).pack(pady=16)
 
 
     def _build_about_panel(self, parent):

@@ -1,3 +1,17 @@
+### v1.6.10 — 2026-08-06
+- **Jira Ticket Creator — Impostazioni**: aggiunta sezione "Assegnatari .cfg" con lista configurabile, radio per default e autocomplete live da API Jira (`/rest/api/2/user/search`) con debounce 300ms
+- **Jira Ticket Creator — Impostazioni**: aggiunto flag `JIRA_VALIDATE_INVOICE` per abilitare/disabilitare la validazione invoice su HUB prima della creazione ticket (default: abilitata)
+- **Jira Ticket Creator**: rimosso bottone "Valida" assegnatario — sostituito dall'autocomplete live sulla stessa API Jira
+- **Jira Ticket Creator**: autocomplete assegnatario aggiunto anche nel form principale
+- **Jira Ticket Creator**: in modalità `.cfg` l'assegnatario di default viene letto da `JIRA_CFG_ASSIGNEES_DEFAULT` invece di essere hardcoded
+- **Jira Ticket Creator**: aggiunto blocco recap copiabile a fine creazione ticket (nome ticket + link + file per cartella destinazione)
+- **Jira Ticket Creator**: log semplificato — rimossi messaggi ridondanti col recap finale
+- **Jira Ticket Creator**: bottone "Rimuovi tutti" allegati sostituito con icona 🗑
+- **Jira Ticket Creator**: layout 50/50 tra form e log (era 68/32)
+- **Jira Ticket Creator**: tasto "Pulisci" ora deseleziona anche il checkbox `.cfg` e sblocca i campi
+- **Jira Ticket Creator**: corretto spazio vuoto a destra dei bottoni Importa/Template nell'header card
+- **Bonifica PROD — Agreement**: l'UPDATE degli agreement esistenti aggiorna ora anche il campo `urn`
+
 ### v1.6.9 — 2026-08-06
 - **Bonifica PROD — Agreement**: l'UPDATE degli agreement esistenti aggiorna ora anche il campo `urn`
 
