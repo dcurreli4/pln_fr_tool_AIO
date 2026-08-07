@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.11"
+VERSION_LAUNCHER = "1.6.12"
 
 
 _REQUIRED = {
@@ -2769,7 +2769,8 @@ _HC_FLAGS = [
     ("CHEQUE_ENERGIE_IS_ACTIVE",           "Cheque Energie"),
 ]
 
-_HC_RUN_KEY = "B2C_SAP_INTEGRATION_IS_ACTIVE"
+_HC_RUN_KEY     = "B2C_SAP_INTEGRATION_IS_ACTIVE"
+_HC_B2B_RUN_KEY = "B2B_SAP_INTEGRATION_IS_ACTIVE"
 
 _HC_FLAGS_B2B = [
     ("B2B_INVOICE_IS_ACTIVE",    "Invoice"),
@@ -2884,14 +2885,21 @@ class HubConsole(_AppBase):
                        lambda: self._run_cleanup("select run_cleanup_b2c_kraken_input();"),
                        color=WARNING).pack(fill="x")
 
-        _make_hc_accordion("Flussi B2B", _HC_FLAGS_B2B, default_open=False)
+        Frame(b2c_content, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(8, 0))
+        run_b2c_frame = Frame(b2c_content, bg=BG_CARD)
+        run_b2c_frame.pack(fill="x", padx=10, pady=(6, 8))
+        self._btn = self._make_btn(run_b2c_frame, "▶  Avvia Run B2C", self._start)
+        self._btn.pack(fill="x")
+
+        b2b_content = _make_hc_accordion("Flussi B2B", _HC_FLAGS_B2B, default_open=False)
+
+        Frame(b2b_content, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(8, 0))
+        run_b2b_frame = Frame(b2b_content, bg=BG_CARD)
+        run_b2b_frame.pack(fill="x", padx=10, pady=(6, 8))
+        self._btn_b2b = self._make_btn(run_b2b_frame, "▶  Avvia Run B2B", self._start_b2b)
+        self._btn_b2b.pack(fill="x")
 
         Frame(left, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(4, 0))
-
-        btn_frame = Frame(left, bg=BG_CARD)
-        btn_frame.pack(fill="x", padx=10, pady=(8, 4), side="bottom")
-        self._btn = self._make_btn(btn_frame, "▶  Avvia Run", self._start)
-        self._btn.pack(fill="x")
 
         right = Frame(body, bg=BG_CARD, highlightthickness=1,
                       highlightbackground=BORDER)
@@ -2976,7 +2984,7 @@ class HubConsole(_AppBase):
             return
         self._running = True
         self._btn.configure(fg=TEXT_SEC, cursor="arrow")
-        self._status_var.set("Avvio run...")
+        self._status_var.set("Avvio run B2C...")
         threading.Thread(target=self._run_worker, daemon=True).start()
 
     def _run_worker(self):
@@ -2993,16 +3001,38 @@ class HubConsole(_AppBase):
                 (_HC_RUN_KEY,))
             conn.commit(); cur.close(); conn.close(); tunnel.stop()
             self._enqueue_log("[OK] Run avviato: B2C_SAP_INTEGRATION_IS_ACTIVE → Y", "ok")
-            self.after(0, self._done, True)
+            self.after(0, self._done, True, self._btn)
         except Exception as e:
             self._enqueue_log(f"[ERRORE] {e}", "error")
-            self.after(0, self._done, False)
+            self.after(0, self._done, False, self._btn)
 
-    def _done(self, success: bool):
+    def _start_b2b(self):
+        if self._running:
+            return
+        self._running = True
+        self._btn_b2b.configure(fg=TEXT_SEC, cursor="arrow")
+        self._status_var.set("Avvio run B2B...")
+        threading.Thread(target=self._run_b2b_worker, daemon=True).start()
+
+    def _run_b2b_worker(self):
+        try:
+            tunnel, conn = self._get_int_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE hub_config_db SET hvalue = 'Y' WHERE hkey = %s",
+                (_HC_B2B_RUN_KEY,))
+            conn.commit(); cur.close(); conn.close(); tunnel.stop()
+            self._enqueue_log("[OK] Run avviato: B2B_SAP_INTEGRATION_IS_ACTIVE → Y", "ok")
+            self.after(0, self._done, True, self._btn_b2b)
+        except Exception as e:
+            self._enqueue_log(f"[ERRORE] {e}", "error")
+            self.after(0, self._done, False, self._btn_b2b)
+
+    def _done(self, success: bool, btn):
         self._running = False
         self._status_var.set("✓ Completato." if success else "✗ Errore.")
-        self._btn.configure(fg=SUCCESS if success else ERROR, cursor="hand2")
-        self.after(3000, lambda: self._btn.configure(fg=ACCENT))
+        btn.configure(fg=SUCCESS if success else ERROR, cursor="hand2")
+        self.after(3000, lambda: btn.configure(fg=ACCENT))
 
 
 

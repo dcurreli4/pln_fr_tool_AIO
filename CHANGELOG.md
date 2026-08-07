@@ -1,3 +1,7 @@
+### v1.6.12 — 2026-08-07
+- **HUB Console**: aggiunto tasto "▶ Avvia Run B2B" nella sezione B2B — alza il flag `B2B_SAP_INTEGRATION_IS_ACTIVE` su `hub_config_db`
+- **HUB Console**: tasto "▶ Avvia Run B2C" spostato dentro la sezione B2C (era in fondo alla sidebar)
+
 ### v1.6.11 — 2026-08-07
 - **HUB Console**: sezioni "Flussi B2C" e "Flussi B2B" ora a fisarmonica — solo una aperta alla volta; B2C aperta di default, B2B chiusa
 - **HUB Console**: aggiunti flag B2B (`B2B_INVOICE_IS_ACTIVE`, `B2B_PAYMENT_IS_ACTIVE`, `B2B_ALLOCATION_IS_ACTIVE`)
