@@ -2894,12 +2894,22 @@ class HubConsole(_AppBase):
         b2b_content = _make_hc_accordion("Flussi B2B", _HC_FLAGS_B2B, default_open=False)
 
         Frame(b2b_content, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(8, 0))
+        cleanup_b2b_frame = Frame(b2b_content, bg=BG_CARD)
+        cleanup_b2b_frame.pack(fill="x", padx=10, pady=(6, 0))
+        Label(cleanup_b2b_frame, text="Cleanup", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 8), anchor="w").pack(fill="x", pady=(0, 4))
+        self._make_btn(cleanup_b2b_frame, "🧹  Pulisci B2B",
+                       lambda: self._run_cleanup("select run_cleanup_b2b();"),
+                       color=WARNING).pack(fill="x", pady=(0, 3))
+        self._make_btn(cleanup_b2b_frame, "🧹  Pulisci B2B Input",
+                       lambda: self._run_cleanup("select run_cleanup_b2b_kraken_input();"),
+                       color=WARNING).pack(fill="x")
+
+        Frame(b2b_content, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(8, 0))
         run_b2b_frame = Frame(b2b_content, bg=BG_CARD)
         run_b2b_frame.pack(fill="x", padx=10, pady=(6, 8))
         self._btn_b2b = self._make_btn(run_b2b_frame, "▶  Avvia Run B2B", self._start_b2b)
         self._btn_b2b.pack(fill="x")
-
-        Frame(left, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(4, 0))
 
         right = Frame(body, bg=BG_CARD, highlightthickness=1,
                       highlightbackground=BORDER)
