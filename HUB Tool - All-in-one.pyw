@@ -2328,6 +2328,12 @@ def run_ade_pipeline(flags, log, on_done, app=None):
             "query_invoice_gas.sql":  "GB",
         }
 
+        # Commodity per il delta payment
+        _PAYMENT_COMMODITY = {
+            "query_payment_elec.sql": "ELEC",
+            "query_payment_gas.sql":  "GAS",
+        }
+
         for flow, flag_key in _ADE_QUERY_FLAGS.items():
             if not flags.get(flow, False):
                 continue
@@ -2385,6 +2391,45 @@ def run_ade_pipeline(flags, log, on_done, app=None):
                 else:
                     log(f"[INFO] Tabella vuota per {prefix}% — full load", "info")
 
+            # ── Payment: delta load ───────────────────────────────────────
+            elif flow in _PAYMENT_COMMODITY:
+                commodity   = _PAYMENT_COMMODITY[flow]
+                date_filter = None
+                try:
+                    cur = hub_conn.cursor()
+                    cur.execute(
+                        "SELECT MAX(updated_at)::date::text FROM j_kraken_payments "
+                        "WHERE commodity = %s",
+                        (commodity,),
+                    )
+                    max_date = cur.fetchone()[0]
+                    cur.close()
+                except Exception as e:
+                    log(f"[ERRORE] Lettura max updated_at per commodity={commodity}: {e}", "error")
+                    failed_tables.add(table)
+                    continue
+
+                if max_date:
+                    log(f"[INFO] Max updated_at (commodity={commodity}): {max_date} — delta load", "info")
+                    try:
+                        cur = hub_conn.cursor()
+                        cur.execute(
+                            "DELETE FROM j_kraken_payments "
+                            "WHERE commodity = %s AND updated_at::date >= %s",
+                            (commodity, max_date),
+                        )
+                        deleted = cur.rowcount
+                        hub_conn.commit(); cur.close()
+                        log(f"[OK] Eliminati {deleted} record con updated_at >= {max_date}", "ok")
+                    except Exception as e:
+                        hub_conn.rollback()
+                        log(f"[ERRORE] DELETE delta fallito: {e}", "error")
+                        failed_tables.add(table)
+                        continue
+                    date_filter = max_date
+                else:
+                    log(f"[INFO] Tabella vuota per commodity={commodity} — full load", "info")
+
             # ── Altri flow: TRUNCATE + full load (una sola volta per tabella) ─
             else:
                 if table not in truncated_tables:
@@ -2401,7 +2446,7 @@ def run_ade_pipeline(flags, log, on_done, app=None):
 
             # Carica query
             log(f"[INFO] Caricamento query '{lbl}' da hub_config_query_kraken ...", "info")
-            _df = date_filter if flow in _INVOICE_ID_PREFIX else None
+            _df = date_filter if flow in _INVOICE_ID_PREFIX or flow in _PAYMENT_COMMODITY else None
             query = _ade_load_query(hub_conn, flow, _df)
             if query is None:
                 log(f"[ERRORE] Query non trovata per '{lbl}'.", "error")
