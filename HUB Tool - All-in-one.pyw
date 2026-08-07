@@ -1,4 +1,4 @@
-"""
+﻿"""
 GUI_-_launcher.pyw  —  Launcher unificato: HUB Prod Sync + Kraken Data Extractor.
 Doppio clic per avviare su Windows (nessuna console).
 """
@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.10"
+VERSION_LAUNCHER = "1.6.11"
 
 
 _REQUIRED = {
@@ -2771,6 +2771,12 @@ _HC_FLAGS = [
 
 _HC_RUN_KEY = "B2C_SAP_INTEGRATION_IS_ACTIVE"
 
+_HC_FLAGS_B2B = [
+    ("B2B_INVOICE_IS_ACTIVE",    "Invoice"),
+    ("B2B_PAYMENT_IS_ACTIVE",    "Payments"),
+    ("B2B_ALLOCATION_IS_ACTIVE", "Allocations"),
+]
+
 
 class HubConsole(_AppBase):
 
@@ -2803,45 +2809,69 @@ class HubConsole(_AppBase):
         left = Frame(left_w, bg=BG_CARD)
         left.pack(fill="both", expand=True)
 
-        hdr = Frame(left, bg=BG_CARD2)
-        hdr.pack(fill="x")
-        Label(hdr, text="▼", bg=BG_CARD2, fg=ACCENT,
-              font=("Consolas", 9)).pack(side="left", padx=(8, 4), pady=6)
-        Label(hdr, text="Flussi B2C", bg=BG_CARD2, fg=TEXT_PRI,
-              font=("Consolas", 10, "bold")).pack(side="left", pady=6)
-        Frame(left, bg=BORDER, height=1).pack(fill="x")
+        self._hc_accordion = []  # (content, arrow_var)
 
-        for hkey, label in _HC_FLAGS:
-            self._flag_vars[hkey] = BooleanVar(value=False)
+        def _make_hc_accordion(title, flags, default_open=False):
+            arrow_var = tkinter.StringVar(value="▼" if default_open else "▶")
 
-            row = Frame(left, bg=BG_CARD)
-            row.pack(fill="x", padx=10, pady=2)
+            hdr_frame = Frame(left, bg=BG_CARD2, cursor="hand2")
+            hdr_frame.pack(fill="x")
+            Label(hdr_frame, textvariable=arrow_var, bg=BG_CARD2, fg=ACCENT,
+                  font=("Consolas", 9)).pack(side="left", padx=(8, 4), pady=6)
+            Label(hdr_frame, text=title, bg=BG_CARD2, fg=TEXT_PRI,
+                  font=("Consolas", 10, "bold")).pack(side="left", pady=6)
+            Frame(left, bg=BORDER, height=1).pack(fill="x")
 
-            box = Label(row, text="☐", bg=BG_CARD, fg=TEXT_SEC,
-                        font=("Consolas", 12), cursor="hand2", width=2)
-            box.pack(side="left", padx=(0, 6))
-            self._flag_boxes[hkey] = box
+            content = Frame(left, bg=BG_CARD)
+            if default_open:
+                content.pack(fill="x")
 
-            lbl = Label(row, text=label, bg=BG_CARD, fg=TEXT_PRI,
-                        font=("Consolas", 10), anchor="w", cursor="hand2")
-            lbl.pack(side="left", fill="x", expand=True)
+            for hkey, label in flags:
+                self._flag_vars[hkey] = BooleanVar(value=False)
+                row = Frame(content, bg=BG_CARD)
+                row.pack(fill="x", padx=10, pady=2)
+                box = Label(row, text="☐", bg=BG_CARD, fg=TEXT_SEC,
+                            font=("Consolas", 12), cursor="hand2", width=2)
+                box.pack(side="left", padx=(0, 6))
+                self._flag_boxes[hkey] = box
+                lbl = Label(row, text=label, bg=BG_CARD, fg=TEXT_PRI,
+                            font=("Consolas", 10), anchor="w", cursor="hand2")
+                lbl.pack(side="left", fill="x", expand=True)
+                def _make_tog(key=hkey, b=box):
+                    def _toggle(e=None):
+                        new_val = not self._flag_vars[key].get()
+                        self._flag_vars[key].set(new_val)
+                        b.configure(text="☑" if new_val else "☐",
+                                    fg=ACCENT if new_val else TEXT_SEC)
+                        self._update_flag_on_hub(key, new_val)
+                    return _toggle
+                tog = _make_tog()
+                box.bind("<Button-1>", tog)
+                lbl.bind("<Button-1>", tog)
 
-            def _make_tog(key=hkey, b=box):
-                def _toggle(e=None):
-                    new_val = not self._flag_vars[key].get()
-                    self._flag_vars[key].set(new_val)
-                    b.configure(text="☑" if new_val else "☐",
-                                fg=ACCENT if new_val else TEXT_SEC)
-                    self._update_flag_on_hub(key, new_val)
-                return _toggle
-            tog = _make_tog()
-            box.bind("<Button-1>", tog)
-            lbl.bind("<Button-1>", tog)
+            self._hc_accordion.append((content, arrow_var, hdr_frame))
 
-        Frame(left, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(8, 0))
+            def _toggle_accordion(e=None):
+                for c, av, _ in self._hc_accordion:
+                    if c is not content:
+                        c.pack_forget()
+                        av.set("▶")
+                if not content.winfo_ismapped():
+                    content.pack(fill="x", after=hdr_frame)
+                    arrow_var.set("▼")
 
-        cleanup_frame = Frame(left, bg=BG_CARD)
-        cleanup_frame.pack(fill="x", padx=10, pady=(10, 0))
+            hdr_frame.bind("<Button-1>", _toggle_accordion)
+            for child in hdr_frame.winfo_children():
+                child.bind("<Button-1>", _toggle_accordion)
+
+            return content
+
+        b2c_content = _make_hc_accordion("Flussi B2C", _HC_FLAGS, default_open=True)
+
+        # Cleanup — dentro la sezione B2C
+        Frame(b2c_content, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(8, 0))
+        cleanup_frame = Frame(b2c_content, bg=BG_CARD)
+        cleanup_frame.pack(fill="x", padx=10, pady=(6, 6))
         Label(cleanup_frame, text="Cleanup", bg=BG_CARD, fg=TEXT_SEC,
               font=("Consolas", 8), anchor="w").pack(fill="x", pady=(0, 4))
         self._make_btn(cleanup_frame, "🧹  Pulisci B2C Customer",
@@ -2854,7 +2884,9 @@ class HubConsole(_AppBase):
                        lambda: self._run_cleanup("select run_cleanup_b2c_kraken_input();"),
                        color=WARNING).pack(fill="x")
 
-        Frame(left, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(10, 0))
+        _make_hc_accordion("Flussi B2B", _HC_FLAGS_B2B, default_open=False)
+
+        Frame(left, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(4, 0))
 
         btn_frame = Frame(left, bg=BG_CARD)
         btn_frame.pack(fill="x", padx=10, pady=(8, 4), side="bottom")
@@ -2885,7 +2917,8 @@ class HubConsole(_AppBase):
         """Legge i flag dalla hub_config_db e aggiorna le checkbox."""
         try:
             tunnel, conn = self._get_int_conn()
-            keys = [k for k, _ in _HC_FLAGS]
+            all_flags = _HC_FLAGS + _HC_FLAGS_B2B
+            keys = [k for k, _ in all_flags]
             placeholders = ",".join(["%s"] * len(keys))
             cur = conn.cursor()
             cur.execute(
@@ -2893,7 +2926,7 @@ class HubConsole(_AppBase):
                 keys)
             rows = {r[0]: r[1] for r in cur.fetchall()}
             cur.close(); conn.close(); tunnel.stop()
-            for hkey, _ in _HC_FLAGS:
+            for hkey, _ in all_flags:
                 val = rows.get(hkey, "N").strip().upper() == "Y"
                 self._flag_vars[hkey].set(val)
                 box = self._flag_boxes[hkey]
@@ -5031,7 +5064,6 @@ class FolderCleaner(_AppBase):
 
         # Ordine invertito: 🗑 → + → ▶  (pack side=right → appare sinistra→destra)
         _icon_btn(hdr, "🗑", self._remove_all, ERROR,  "Rimuovi tutto").pack(side="right", padx=(0, 4))
-        _icon_btn(hdr, "+", self._browse_folder, SUCCESS, "Aggiungi cartella").pack(side="right", padx=(0, 4))
         self._btn = _icon_btn(hdr, "▶", self._start, ACCENT, "Avvia pulizia")
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
@@ -5323,8 +5355,6 @@ class FileValidator(_AppBase):
             return lbl
 
         _icon_btn(hdr, "🗑", self._remove_all, ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
-        _icon_btn(hdr, "🗜", self._browse_zip,  SUCCESS, "Aggiungi ZIP").pack(side="right", padx=(0, 4))
-        _icon_btn(hdr, "+", self._browse_folder, SUCCESS, "Aggiungi cartella").pack(side="right", padx=(0, 4))
         self._btn = _icon_btn(hdr, "▶", self._start, ACCENT, "Avvia validazione")
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
@@ -6308,7 +6338,6 @@ class ZipFolder(_AppBase):
             return lbl
 
         _icon_btn(hdr, "🗑", self._clear_all,    ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
-        _icon_btn(hdr, "+", self._browse_folder, SUCCESS, "Aggiungi cartella").pack(side="right", padx=(0, 4))
         self._btn = _icon_btn(hdr, "▶", self._start, ACCENT, "Avvia ZIP")
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
@@ -10264,7 +10293,6 @@ class CsvBlankHeaderRemover(_AppBase):
             return lbl
 
         _icon_btn("🗑", self._remove_all,    ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
-        _icon_btn("+",  self._browse_files,  SUCCESS, "Aggiungi file").pack(side="right", padx=(0, 4))
         self._btn = _icon_btn("▶", self._start, ACCENT, "Avvia rimozione header")
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
@@ -11352,28 +11380,31 @@ class JiraTicketCreator(_AppBase):
         self._files_frame = Frame(att_body, bg=BG_CARD)
         self._files_frame.pack(fill="x")
 
-        # ── Riga 1: checkbox .cfg + Preview ──────────────────────────────
-        cfg_row = Frame(inner, bg=BG)
-        cfg_row.pack(fill="x", padx=10, pady=(10, 0))
+        # ── Card File .cfg ────────────────────────────────────────────────
+        cfg_card = Frame(inner, bg=BG_CARD, highlightthickness=1,
+                         highlightbackground=BORDER)
+        cfg_card.pack(fill="x", padx=10, pady=(10, 0))
+        cfg_hdr = Frame(cfg_card, bg=BG_CARD2)
+        cfg_hdr.pack(fill="x")
 
-        cfg_left = Frame(cfg_row, bg=BG)
-        cfg_left.pack(side="left")
+        cfg_left = Frame(cfg_hdr, bg=BG_CARD2)
+        cfg_left.pack(side="left", padx=(8, 0), pady=6)
         self._cfg_var = tkinter.BooleanVar(value=False)
-        self._cfg_box = Label(cfg_left, text="\u2610", bg=BG, fg=TEXT_SEC,
+        self._cfg_box = Label(cfg_left, text="\u2610", bg=BG_CARD2, fg=TEXT_SEC,
                               font=("Consolas", 12), cursor="hand2", width=2)
         self._cfg_box.pack(side="left")
-        cfg_lbl = Label(cfg_left, text="Crea file .cfg", bg=BG, fg=TEXT_PRI,
-                        font=("Consolas", 9), cursor="hand2")
+        cfg_lbl = Label(cfg_left, text="Crea file .cfg", bg=BG_CARD2, fg=TEXT_SEC,
+                        font=("Consolas", 9, "bold"), cursor="hand2")
         cfg_lbl.pack(side="left", padx=(4, 0))
 
-        cfg_right = Frame(cfg_row, bg=BG)
-        cfg_right.pack(side="right")
+        cfg_right = Frame(cfg_hdr, bg=BG_CARD2)
+        cfg_right.pack(side="right", padx=(0, 4), pady=4)
         self._btn_preview_cfg = self._make_btn(cfg_right, "\U0001f441  Preview .cfg",
                                                self._on_debug, color=WARNING)
 
-        # ── Riga 2: Crea Ticket + Salva Template + Pulisci ───────────────
+        # ── Riga bottoni: Crea Ticket + Salva Template + Pulisci ─────────
         btn_row = Frame(inner, bg=BG)
-        btn_row.pack(fill="x", padx=10, pady=(6, 16))
+        btn_row.pack(fill="x", padx=10, pady=(10, 16))
 
         btn_right = Frame(btn_row, bg=BG)
         btn_right.pack(side="right")
@@ -11389,6 +11420,7 @@ class JiraTicketCreator(_AppBase):
             self._cfg_var.set(val)
             self._cfg_box.configure(text="\u2611" if val else "\u2610",
                                     fg=ACCENT if val else TEXT_SEC)
+            cfg_lbl.configure(fg=ACCENT if val else TEXT_SEC)
             if val:
                 self._btn_preview_cfg.pack(side="right", in_=cfg_right)
                 self._cfg_lock_fields()
@@ -11399,6 +11431,7 @@ class JiraTicketCreator(_AppBase):
         self._cfg_box.bind("<Button-1>", _toggle_cfg)
         cfg_lbl.bind("<Button-1>", _toggle_cfg)
         cfg_left.bind("<Button-1>", _toggle_cfg)
+        cfg_hdr.bind("<Button-1>", _toggle_cfg)
 
     def _cfg_lock_fields(self):
         """Prepopola i campi con valori fissi e li rende non modificabili."""

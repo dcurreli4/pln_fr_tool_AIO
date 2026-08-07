@@ -1,3 +1,7 @@
+### v1.6.11 — 2026-08-07
+- **HUB Console**: sezioni "Flussi B2C" e "Flussi B2B" ora a fisarmonica — solo una aperta alla volta; B2C aperta di default, B2B chiusa
+- **HUB Console**: aggiunti flag B2B (`B2B_INVOICE_IS_ACTIVE`, `B2B_PAYMENT_IS_ACTIVE`, `B2B_ALLOCATION_IS_ACTIVE`)
+
 ### v1.6.10 — 2026-08-06
 - **Jira Ticket Creator — Impostazioni**: aggiunta sezione "Assegnatari .cfg" con lista configurabile, radio per default e autocomplete live da API Jira (`/rest/api/2/user/search`) con debounce 300ms
 - **Jira Ticket Creator — Impostazioni**: aggiunto flag `JIRA_VALIDATE_INVOICE` per abilitare/disabilitare la validazione invoice su HUB prima della creazione ticket (default: abilitata)
