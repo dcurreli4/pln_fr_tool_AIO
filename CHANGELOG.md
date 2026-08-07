@@ -1,3 +1,6 @@
+### v1.6.13 — 2026-08-07
+- **Kraken Full Data Extractor — Payment**: introdotto delta load su `updated_at` (come Invoice su `finalized_at`) — cancella i record dell'ultimo giorno e ricarica da Kraken solo il delta; full load se la tabella è vuota; i flow ELEC e GAS sono gestiti separatamente tramite `commodity`
+
 ### v1.6.12 — 2026-08-07
 - **HUB Console**: aggiunto tasto "▶ Avvia Run B2B" nella sezione B2B — alza il flag `B2B_SAP_INTEGRATION_IS_ACTIVE` su `hub_config_db`
 - **HUB Console**: tasto "▶ Avvia Run B2C" spostato dentro la sezione B2C (era in fondo alla sidebar)
