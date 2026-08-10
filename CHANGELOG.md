@@ -1,3 +1,7 @@
+### v1.6.15 — 2026-08-10
+- **File Filter — Payments**: fix `NameError: name 'valid' is not defined` nel popup modifica chiavi Reference+Data+Tipo
+- **File Filter — Payments**: messaggio errore chiavi non valide ora usa singolare/plurale corretto ("1 chiave non valida" / "N chiavi non valide")
+
 ### v1.6.14 — 2026-08-10
 - **Kraken Full Data Extractor**: aggiunto flusso "Invoice B2B" (ELEC + GAS) — delta load su `finalized_at` verso `j_kraken_invoice_b2b`, query `B2B_INVOICE_ELEC` / `B2B_INVOICE_GAS` da `hub_config_query_kraken`
 - **Validator / Jira Ticket Creator**: check HUB per fatture B2B ora usa `j_kraken_invoice_b2b`; campo importo `payment_amount` per KF, `gross_amount` per KM; fix parsing `template_vars_json` in formato Python dict (apici singoli) tramite `ast.literal_eval`

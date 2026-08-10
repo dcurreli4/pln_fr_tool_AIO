@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.14"
+VERSION_LAUNCHER = "1.6.15"
 
 
 _REQUIRED = {
@@ -7364,9 +7364,9 @@ class PaymentPlansFilter(_AppBase):
         Label(mode_btn, text="▾", bg=BG_INPUT, fg=TEXT_SEC,
               font=("Consolas", 9), padx=6).pack(side="left")
 
-        _PAY_MODE_OPTIONS = ["Reference", "Reference + Data + Tipo (P/R)"]
+        _PAY_MODE_OPTIONS = ["Reference", "Reference + Data + Tipo (PAYMENT/REJECT)"]
         _PAY_MODE_MAP     = {"Reference": "reference",
-                              "Reference + Data + Tipo (P/R)": "key_ref_date_type"}
+                              "Reference + Data + Tipo (PAYMENT/REJECT)": "key_ref_date_type"}
         _PAY_MODE_MAP_INV = {v: k for k, v in _PAY_MODE_MAP.items()}
 
         def _open_mode_menu(e=None):
@@ -7384,7 +7384,7 @@ class PaymentPlansFilter(_AppBase):
         mode_lbl.bind("<Button-1>", _open_mode_menu)
         self._pay_mode_map_inv = _PAY_MODE_MAP_INV
         mode = _pay_get("PAY_FILTER_MODE") or "key_ref_date_type"
-        self._pay_mode_var.set(_PAY_MODE_MAP_INV.get(mode, "Reference + Data + Tipo (P/R)"))  # noqa: E501
+        self._pay_mode_var.set(_PAY_MODE_MAP_INV.get(mode, "Reference + Data + Tipo (PAYMENT/REJECT)"))  # noqa: E501
 
         # Debug chiavi
         row3 = Frame(top, bg=BG_CARD)
@@ -7494,9 +7494,9 @@ class PaymentPlansFilter(_AppBase):
         )
 
         tab_composite = Frame(sub_nb, bg=BG)
-        sub_nb.add(tab_composite, text="  Reference + Data + Tipo (P/R)  ")
+        sub_nb.add(tab_composite, text="  Reference + Data + Tipo (PAYMENT/REJECT)  ")
         self._build_pay_filter_key_tab(
-            tab_composite, "Reference + Data + Tipo (P/R)",
+            tab_composite, "Reference + Data + Tipo (PAYMENT/REJECT)",
             attr_tree="_pay_filter_tree_composite",
             attr_count="_pay_filter_count_var_composite",
             paste_cmd=self._pay_filter_paste_popup_composite,
@@ -7742,7 +7742,7 @@ class PaymentPlansFilter(_AppBase):
     def _pay_filter_paste_popup_composite(self):
         self._pay_filter_paste_popup_for(
             "_pay_filter_tree_composite", "_pay_filter_count_var_composite",
-            _PAY_FILTER_FILE_COMPOSITE, "Reference + Data + Tipo (P/R)")
+            _PAY_FILTER_FILE_COMPOSITE, "Reference + Data + Tipo (PAYMENT/REJECT)")
 
     def _pay_filter_paste_popup_for(self, attr_tree, attr_count, filter_file, label):
         tree      = getattr(self, attr_tree)
@@ -7782,7 +7782,8 @@ class PaymentPlansFilter(_AppBase):
 
         feedback_var = tkinter.StringVar(value="")
         Label(popup, textvariable=feedback_var, bg=BG, fg=WARNING,
-              font=("Consolas", 9), pady=4).pack(side="bottom", fill="x", padx=16)
+              font=("Consolas", 9), pady=4, justify="left",
+              anchor="w").pack(side="bottom", fill="x", padx=16)
 
         txt_frame = Frame(popup, bg=BG_CARD)
         txt_frame.pack(fill="both", expand=True, padx=16, pady=(8, 0))
@@ -7795,6 +7796,7 @@ class PaymentPlansFilter(_AppBase):
         txt.pack(fill="both", expand=True)
         vsb.config(command=txt.yview)
         txt.focus_set()
+        txt.tag_configure("invalid", foreground=WARNING, background="#2a1f00")
 
         existing = [tree.item(iid, "values")[0] for iid in tree.get_children()]
         if existing:
@@ -7812,19 +7814,25 @@ class PaymentPlansFilter(_AppBase):
 
         def _on_conferma():
             raw = txt.get("1.0", "end").strip().splitlines()
-            stripped = [line.strip() for line in raw if line.strip()]
+            txt.tag_remove("invalid", "1.0", "end")
+            feedback_var.set("")
+            stripped = [(i, line.strip()) for i, line in enumerate(raw) if line.strip()]
             if not stripped:
                 feedback_var.set("\u26a0  Nessuna chiave trovata.")
                 return
-            invalid = [k for k in stripped if not _validate(k)]
-            if invalid:
-                sample = ", ".join(invalid[:3]) + ("\u2026" if len(invalid) > 3 else "")
-                feedback_var.set(f"\u26a0  {len(invalid)} chiave/i non valida/e: {sample} \u2014 {_fmt_hint}")
+            invalid_lines = [(i, k) for i, k in stripped if not _validate(k)]
+            for i, _ in invalid_lines:
+                txt.tag_add("invalid", f"{i+1}.0", f"{i+1}.end")
+            if invalid_lines:
+                _n = len(invalid_lines)
+                _lbl = "chiave non valida" if _n == 1 else "chiavi non valide"
+                feedback_var.set(f"\u26a0  {_n} {_lbl}.\n{_fmt_hint}")
                 return
+            valid = [k for _, k in stripped]
             tree.delete(*tree.get_children())
-            for v in stripped:
+            for v in valid:
                 tree.insert("", "end", values=(v,))
-            count_var.set(f"{len(stripped)} chiavi.")
+            count_var.set(f"{len(valid)} chiavi.")
             self._save_pay_filter_for(attr_tree, filter_file)
             popup.destroy()
 
