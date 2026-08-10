@@ -1,3 +1,13 @@
+### v1.6.16 — 2026-08-10
+- **Validator — Payment**: implementata validazione payment B2C — classifica file da nome (regex B2B/B2C/KH/KJ), aggrega per (reference, date, sign) separando PAYMENT e REJECT, cerca su `j_kraken_payments` con query `unnest` + JOIN ottimizzata con pre-filtro su `reference`/`payment_id`, confronta totali e logga chiavi mancanti con file sorgente
+- **Validator — Payment**: file KH e KJ riconosciuti ma esclusi dalla validazione HUB (logga solo il conteggio)
+- **Validator — Payment**: file B2B skippano la validazione HUB
+- **Jira Ticket Creator**: aggiunta validazione payment su HUB prima della creazione ticket (flag `JIRA_VALIDATE_PAYMENT`, default abilitato) — stesso flusso del Validator ma legge da ZIP
+- **Refactoring**: estratte `_pay_aggregate_lines` e `_pay_check_hub` come funzioni condivise tra Validator e Jira Ticket Creator
+- **Jira Ticket Creator — Impostazioni**: aggiunto flag `JIRA_VALIDATE_PAYMENT` per abilitare/disabilitare la validazione payment su HUB
+- **`_invoice_check_hub`**: fix parsing `template_vars_json` — ora prova prima `json.loads` (B2C, JSON standard) e poi `ast.literal_eval` (B2B, formato Python dict)
+- **File Filter — Payments**: conteggio post-filtro mostra ora anche chiavi distinte (`x righe [y chiavi distinte]`)
+
 ### v1.6.15 — 2026-08-10
 - **File Filter — Payments**: fix `NameError: name 'valid' is not defined` nel popup modifica chiavi Reference+Data+Tipo
 - **File Filter — Payments**: messaggio errore chiavi non valide ora usa singolare/plurale corretto ("1 chiave non valida" / "N chiavi non valide")

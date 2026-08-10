@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.15"
+VERSION_LAUNCHER = "1.6.16"
 
 
 _REQUIRED = {
@@ -372,6 +372,7 @@ SETTINGS_TABS = [
         ]),
         ("Opzioni", [
             ("JIRA_VALIDATE_INVOICE", "Valida invoice su HUB", "bool"),
+            ("JIRA_VALIDATE_PAYMENT", "Valida payment su HUB", "bool"),
         ]),
     ]),
     ("💳  File Filter", [
@@ -5383,6 +5384,12 @@ class FolderCleaner(_AppBase):
 
 _FV_TXT = _HERE / "input" / "validator" / "folders.txt"
 
+import re as _fv_re
+_PAY_B2B_RE = _fv_re.compile(r'^(KE|KG)_[A-Z0-9]{2}_BC\d{10}_\d{8}\.csv$', _fv_re.IGNORECASE)
+_PAY_B2C_RE = _fv_re.compile(r'^(KE|KG)_[A-Z0-9]{2}_[A-Z]_\d{10}_\d{8}\.csv$', _fv_re.IGNORECASE)
+_PAY_KH_RE  = _fv_re.compile(r'^CE_KH_[A-Z]_\d{10}_\d{8}\.csv$', _fv_re.IGNORECASE)
+_PAY_KJ_RE  = _fv_re.compile(r'^CE_KJ_[A-Z]_\d{10}_\d{8}\.csv$', _fv_re.IGNORECASE)
+
 
 class FileValidator(_AppBase):
 
@@ -5664,12 +5671,127 @@ class FileValidator(_AppBase):
             if mode == 0:
                 self._run_invoice_validation()
             else:
-                self._enqueue_log("TODO", "info")
-                self.after(0, lambda: self._on_done(success=True))
+                self._run_payment_validation()
 
         threading.Thread(target=_run, daemon=True).start()
 
     _INVOICE_TYPES = {"KF", "KR", "KM", "KK"}
+
+    def _run_payment_validation(self):
+        folders = list(self._folders)
+        if not folders:
+            self._enqueue_log("[WARN] Nessuna cartella caricata.", "warn")
+            self.after(0, lambda: self._on_done(success=False))
+            return
+
+        all_ok   = True
+        hub_conn = None
+        self._enqueue_log("[INFO] Connessione a HUB in corso...", "info")
+        try:
+            _reload_env()
+            hub_conn = get_hub_connection()
+            self._enqueue_log("[OK] Connessione HUB stabilita.", "ok")
+        except Exception as e:
+            self._enqueue_log(f"[ERRORE] Connessione HUB: {e}", "error")
+            self.after(0, lambda: self._on_done(success=False))
+            return
+
+        for entry in folders:
+            entry_path = Path(entry)
+            self._enqueue_log(f"\n── {entry_path.name} ──", "section")
+
+            if not entry_path.is_dir():
+                self._enqueue_log("[ERRORE] Solo cartelle supportate per Payment.", "error")
+                all_ok = False
+                continue
+
+            self._enqueue_log("[INFO] Analisi file nella cartella...", "info")
+            files = [x for x in entry_path.iterdir() if x.is_file()]
+            if not files:
+                self._enqueue_log("[ERRORE] Cartella vuota.", "error")
+                all_ok = False
+                continue
+
+            non_csv = [f.name for f in files if f.suffix.lower() != ".csv"]
+            if non_csv:
+                sample = ", ".join(non_csv[:3])
+                extra  = "..." if len(non_csv) > 3 else ""
+                self._enqueue_log(f"[ERRORE] File non .csv trovati: {sample}{extra}", "error")
+                all_ok = False
+                continue
+
+            b2b_files = [f for f in files if _PAY_B2B_RE.match(f.name)]
+            b2c_files = [f for f in files if _PAY_B2C_RE.match(f.name)
+                         and not _PAY_B2B_RE.match(f.name)]
+            kh_files  = [f for f in files if _PAY_KH_RE.match(f.name)]
+            kj_files  = [f for f in files if _PAY_KJ_RE.match(f.name)]
+            unknown   = [f.name for f in files
+                         if not _PAY_B2B_RE.match(f.name)
+                         and not _PAY_B2C_RE.match(f.name)
+                         and not _PAY_KH_RE.match(f.name)
+                         and not _PAY_KJ_RE.match(f.name)]
+
+            if unknown:
+                sample = ", ".join(unknown[:3])
+                extra  = "..." if len(unknown) > 3 else ""
+                self._enqueue_log(
+                    f"[ERRORE] File non riconosciuti (nome non conforme): {sample}{extra}", "error")
+                all_ok = False
+                continue
+
+            if kh_files:
+                self._enqueue_log(f"[INFO] {len(kh_files)} file KH trovati — esclusi dalla validazione.", "info")
+            if kj_files:
+                self._enqueue_log(f"[INFO] {len(kj_files)} file KJ trovati — esclusi dalla validazione.", "info")
+
+            if b2b_files and b2c_files:
+                self._enqueue_log("[ERRORE] File B2B e B2C misti non ammessi.", "error")
+                all_ok = False
+                continue
+
+            if b2b_files:
+                self._enqueue_log(f"[OK] Tipo: B2B  |  {len(b2b_files)} file  |  Validazione HUB: skippata.", "ok")
+                continue
+
+            # ── B2C: aggrega per (reference, payment_date) sommando amount ──
+            tipo  = "B2C"
+            count = len(b2c_files)
+            self._enqueue_log(f"[INFO] Lettura e aggregazione di {count} file B2C...", "info")
+            aggregated: dict = {}
+            key_source: dict = {}
+            for f in b2c_files:
+                agg, ks, errs = _pay_aggregate_lines(f.read_text(encoding="utf-8").splitlines(), f.name)
+                for k, v in agg.items():
+                    aggregated[k] = aggregated.get(k, 0.0) + v
+                key_source.update(ks)
+                if errs:
+                    self._enqueue_log(f"[WARN] Impossibile leggere: {f.name}", "warn")
+
+            keys          = {f"R{r}D{d}T{s}" for (r, d, s) in aggregated}
+            distinct_refs = {r for r, _, _ in aggregated}
+            total_amt     = sum(aggregated.values())
+            self._enqueue_log(
+                f"[INFO] Tipo: {tipo}  |  {count} file  |  "
+                f"Chiavi distinte: {len(keys)}  |  "
+                f"Reference distinte: {len(distinct_refs)}  |  "
+                f"Totale amount: {total_amt:.2f}", "info")
+            self._enqueue_log(f"[INFO] Ricerca {len(keys)} chiavi su HUB (j_kraken_payments)...", "info")
+
+            try:
+                if not _pay_check_hub(hub_conn, aggregated, key_source, self._enqueue_log):
+                    all_ok = False
+            except Exception as e:
+                self._enqueue_log(f"[ERRORE] Validazione HUB: {e}", "error")
+                all_ok = False
+
+        if hub_conn:
+            hub_conn.close()
+
+        if all_ok:
+            self._enqueue_log("\n[OK] Validazione completata con successo.", "ok")
+        else:
+            self._enqueue_log("\n[ERRORE] Validazione completata con errori.", "error")
+        self.after(0, lambda: self._on_done(success=all_ok))
 
     def _run_invoice_validation(self):
         folders = list(self._folders)
@@ -6946,6 +7068,7 @@ def _pay_process_file(input_path, filter_set, output_path, cfg, log_fn):
         sum_amount     = 0.0
         total_rows     = 0
         total_kept     = 0
+        kept_keys      = set()
         debug_printed  = 0
 
         for line in body:
@@ -6973,10 +7096,11 @@ def _pay_process_file(input_path, filter_set, output_path, cfg, log_fn):
                 sum_amount += amount_val
                 output_lines.append(line)
                 total_kept += 1
+                kept_keys.add(key)
 
         if total_kept == 0:
             log_fn(f"[INFO] {input_path.name} — tutte le righe filtrate, saltata.", "info")
-            return 0, 0.0, total_rows
+            return 0, 0.0, total_rows, set()
 
         header_columns = header.split(";")
         if len(header_columns) >= 4:
@@ -6991,10 +7115,10 @@ def _pay_process_file(input_path, filter_set, output_path, cfg, log_fn):
         log_fn(
             f"[OK] {input_path.name}  →  "
             f"{total_rows} originali / {total_kept} mantenuti", "ok")
-        return total_kept, sum_amount, total_rows
+        return total_kept, sum_amount, total_rows, kept_keys
     except Exception as e:
         log_fn(f"[ERRORE] {input_path.name}: {e}", "error")
-        return 0, 0.0, 0
+        return 0, 0.0, 0, set()
 
 
 def pay_run_pipeline(cfg_data, log_fn, on_done):
@@ -7054,20 +7178,22 @@ def pay_run_pipeline(cfg_data, log_fn, on_done):
         log_fn(f"\n[INFO] File da elaborare: {len(csv_files)}", "info")
         total_kept_all = 0
         total_sum_all  = 0.0
+        all_kept_keys  = set()
         files_written  = 0
 
         for csv_path in csv_files:
-            kept, kept_sum, _total = _pay_process_file(
+            kept, kept_sum, _total, kept_keys = _pay_process_file(
                 csv_path, filter_set, output_folder / csv_path.name, cfg_data, log_fn)
             total_kept_all += kept
             total_sum_all  += kept_sum
+            all_kept_keys  |= kept_keys
             if kept > 0:
                 files_written += 1
 
         output_files = [f for f in output_folder.rglob("*") if f.is_file()]
         log_fn("\n── Riepilogo ──", "section")
         log_fn(f"[INFO] File generati: {files_written} su {len(csv_files)} analizzati", "info")
-        log_fn(f"[INFO] Pagamenti trovati post filtro: {total_kept_all}", "info")
+        log_fn(f"[INFO] Pagamenti trovati post filtro: {total_kept_all} righe [{len(all_kept_keys)} chiavi distinte]", "info")
         log_fn(f"[INFO] Somma amount post filtro: {_pay_format_header_amount(total_sum_all)}", "info")
 
         if output_files:
@@ -10692,6 +10818,106 @@ def _jira_validate_zip_structure(all_entries):
 _JIRA_INVOICE_TYPES = {"KF", "KR", "KM", "KK"}
 
 
+def _pay_aggregate_lines(lines, filename):
+    """
+    Aggrega le righe body di un CSV payment per (reference, payment_date, sign).
+    Ritorna (aggregated, key_source, parse_errors).
+    aggregated: {(ref, date, sign) -> amount}
+    key_source: {(ref, date, sign) -> filename}
+    """
+    COL_REF, COL_AMT, COL_DATE = 12, 8, 9
+    aggregated   = {}
+    key_source   = {}
+    parse_errors = []
+    try:
+        for line in lines[1:]:
+            line = line.strip()
+            if not line or line.endswith(";END"):
+                continue
+            cols = line.split(";")
+            ref  = cols[COL_REF].strip()
+            date = cols[COL_DATE].strip()
+            try:
+                amt = float(cols[COL_AMT].replace(",", "."))
+            except (ValueError, IndexError):
+                amt = 0.0
+            sign = "PAYMENT" if amt >= 0 else "REJECT"
+            k = (ref, date, sign)
+            aggregated[k] = aggregated.get(k, 0.0) + amt
+            key_source[k] = filename
+    except Exception:
+        parse_errors.append(filename)
+    return aggregated, key_source, parse_errors
+
+
+def _pay_check_hub(hub_conn, aggregated, key_source, log_fn, label=""):
+    """
+    Verifica le chiavi payment su j_kraken_payments e confronta i totali.
+    Ritorna True se tutto ok, False se ci sono errori.
+    """
+    import re as _re_pay
+    prefix = f"{label}  |  " if label else ""
+    _key_re = _re_pay.compile(r'^R(.+)D\d{8}T(?:PAYMENT|REJECT)$')
+
+    key_to_source   = {f"R{r}D{d}T{s}": key_source[(r, d, s)] for (r, d, s) in aggregated}
+    key_to_file_amt = {f"R{r}D{d}T{s}": a for (r, d, s), a in aggregated.items()}
+    keys      = set(key_to_source.keys())
+    total_amt = sum(aggregated.values())
+
+    if not keys:
+        return True
+
+    ref_values = list({m.group(1) for k in keys for m in [_key_re.match(k)] if m})
+    cur = hub_conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT p.key, jp.amount::numeric
+        FROM unnest(%s::text[]) AS p(key)
+        JOIN j_kraken_payments jp
+          ON (jp.reference = ANY(%s) OR jp.payment_id = ANY(%s))
+         AND concat(
+              'R', CASE WHEN jp.transaction_type = 'BACS_DEPOSIT' THEN jp.payment_id ELSE jp.reference END,
+              'D', replace(jp.payment_date::text, '-', ''),
+              'T', CASE WHEN jp.amount::numeric > 0 THEN 'PAYMENT' ELSE 'REJECT' END
+          ) = p.key
+    """, (list(keys), ref_values, ref_values))
+    rows       = cur.fetchall()
+    cur.close()
+    found_keys = {row[0] for row in rows}
+    hub_total  = sum(float(row[1]) for row in rows if row[1] is not None) / 100
+
+    all_ok  = True
+    missing = keys - found_keys
+    if missing:
+        log_fn(f"[ERRORE] {prefix}Trovate su HUB: {len(found_keys)}/{len(keys)}  |  "
+               f"Mancanti: {len(missing)}", "error")
+        for mk in sorted(missing):
+            src = key_to_source.get(mk, "?")
+            log_fn(f"  [MANCANTE] {mk}  ({src})", "error")
+        all_ok = False
+    else:
+        log_fn(f"[OK] {prefix}Trovate su HUB: {len(found_keys)}/{len(keys)}", "ok")
+
+    hub_amt_by_key = {row[0]: float(row[1]) / 100 for row in rows if row[1] is not None}
+    amt_mismatches = [(k, key_to_file_amt[k], hub_amt_by_key[k])
+                     for k in found_keys
+                     if k in key_to_file_amt and abs(hub_amt_by_key.get(k, 0) - key_to_file_amt[k]) >= 0.01]
+
+    if abs(hub_total - total_amt) < 0.01:
+        log_fn(f"[OK] {prefix}Totale HUB: {hub_total:.2f}  |  "
+               f"Totale file: {total_amt:.2f}  |  Corrispondono", "ok")
+    else:
+        log_fn(f"[WARN] {prefix}Totale HUB: {hub_total:.2f}  |  "
+               f"Totale file: {total_amt:.2f}  |  "
+               f"Differenza: {abs(hub_total - total_amt):.2f}", "warn")
+    if amt_mismatches:
+        log_fn(f"[WARN] {prefix}{len(amt_mismatches)} chiave/i con importo discordante:", "warn")
+        for k, fa, ha in sorted(amt_mismatches):
+            src = key_to_source.get(k, "?")
+            log_fn(f"  [WARN] {k}  file: {fa:.2f}  HUB: {ha:.2f}  ({src})", "warn")
+
+    return all_ok
+
+
 def _invoice_check_hub(hub_conn, references: set, file_total: float, log_fn, label: str = "", table: str = "j_kraken_invoice", amount_field: str = "gross_amount") -> bool:
     """
     Verifica le reference su j_kraken_invoice (o j_kraken_invoice_b2b) e confronta il totale.
@@ -10714,7 +10940,14 @@ def _invoice_check_hub(hub_conn, references: set, file_total: float, log_fn, lab
             found.add(identifier)
         if tvj:
             try:
-                d = _ast.literal_eval(tvj) if isinstance(tvj, str) else tvj
+                if isinstance(tvj, str):
+                    try:
+                        import json as _json
+                        d = _json.loads(tvj)
+                    except Exception:
+                        d = _ast.literal_eval(tvj)
+                else:
+                    d = tvj
                 val = d.get("sumup", {}).get(amount_field)
                 if val is not None:
                     kraken_total += float(val)
@@ -10833,6 +11066,89 @@ def _jira_validate_invoice_hub(zip_paths, log_fn):
 
     if not has_invoice:
         log_fn("[WARN] Nessun file invoice (KF/KR/KM/KK) trovato — verifica HUB saltata.", "warn")
+
+    return all_ok
+
+
+def _jira_validate_payment_hub(zip_paths, log_fn):
+    """
+    Valida i file payment B2C contenuti negli ZIP contro j_kraken_payments su HUB.
+    I file B2B vengono skippati. Ritorna True se tutto ok, False se ci sono errori.
+    """
+    import zipfile as _zf, os as _os
+    all_ok      = True
+    has_payment = False
+
+    try:
+        _reload_env()
+        hub_conn = get_hub_connection()
+    except Exception as e:
+        log_fn(f"[ERRORE] Connessione HUB: {e}", "error")
+        return False
+
+    try:
+        for zip_path in zip_paths:
+            zip_name = _os.path.basename(zip_path)
+            try:
+                with _zf.ZipFile(zip_path, "r") as z:
+                    all_entries = z.namelist()
+                    leaf_files, _ = _jira_validate_zip_structure(all_entries)
+                    if not leaf_files:
+                        continue
+                    pay_files = [n for n in leaf_files
+                                 if _jira_detect_file_type(n) == "Pagamenti"]
+                    if not pay_files:
+                        continue
+
+                    b2b_files = [n for n in pay_files if _PAY_B2B_RE.match(n)]
+                    b2c_files = [n for n in pay_files
+                                 if _PAY_B2C_RE.match(n) and not _PAY_B2B_RE.match(n)]
+
+                    if b2b_files and not b2c_files:
+                        log_fn(f"[INFO] {zip_name} — File B2B: validazione HUB skippata.", "info")
+                        continue
+                    if b2b_files and b2c_files:
+                        log_fn(f"[ERRORE] {zip_name} — File B2B e B2C misti non ammessi.", "error")
+                        all_ok = False
+                        continue
+                    if not b2c_files:
+                        continue
+
+                    has_payment = True
+                    zip_entry_map = {_os.path.basename(e): e
+                                     for e in all_entries if not e.endswith("/")}
+                    aggregated: dict = {}
+                    key_source: dict = {}
+
+                    for name in b2c_files:
+                        try:
+                            content = z.read(zip_entry_map.get(name, name)).decode("utf-8")
+                            agg, ks, errs = _pay_aggregate_lines(content.splitlines(), name)
+                            for k, v in agg.items():
+                                aggregated[k] = aggregated.get(k, 0.0) + v
+                            key_source.update(ks)
+                            if errs:
+                                log_fn(f"[WARN] {zip_name} — Impossibile leggere: {name}", "warn")
+                        except Exception:
+                            log_fn(f"[WARN] {zip_name} — Impossibile leggere: {name}", "warn")
+
+                    keys      = {f"R{r}D{d}T{s}" for (r, d, s) in aggregated}
+                    total_amt = sum(aggregated.values())
+                    log_fn(f"[INFO] {zip_name}  |  Chiavi distinte: {len(keys)}  |  "
+                           f"Totale amount: {total_amt:.2f}", "info")
+                    log_fn(f"[INFO] {zip_name} — Ricerca {len(keys)} chiavi su HUB (j_kraken_payments)...", "info")
+
+                    if not _pay_check_hub(hub_conn, aggregated, key_source, log_fn, zip_name):
+                        all_ok = False
+
+            except Exception as e:
+                log_fn(f"[ERRORE] Impossibile leggere {zip_name}: {e}", "error")
+                all_ok = False
+    finally:
+        hub_conn.close()
+
+    if not has_payment:
+        log_fn("[WARN] Nessun file payment B2C trovato — verifica HUB saltata.", "warn")
 
     return all_ok
 
@@ -12101,6 +12417,14 @@ class JiraTicketCreator(_AppBase):
                         _jira_validate_invoice_hub(zip_paths, self._enqueue_log)
                     else:
                         self._enqueue_log("[DEBUG] Validazione invoice su HUB: disabilitata.", "warn")
+
+                    # Validazione payment vs HUB
+                    _validate_pay = os.getenv("JIRA_VALIDATE_PAYMENT", "true").lower() not in {"false", "0", "no", "n"}
+                    if _validate_pay:
+                        self._enqueue_log("[DEBUG] Validazione payment su HUB...", "info")
+                        _jira_validate_payment_hub(zip_paths, self._enqueue_log)
+                    else:
+                        self._enqueue_log("[DEBUG] Validazione payment su HUB: disabilitata.", "warn")
             else:
                 self._enqueue_log("[DEBUG] .cfg: disabilitato", "info")
 
@@ -12214,6 +12538,18 @@ class JiraTicketCreator(_AppBase):
                         return
                 else:
                     self._enqueue_log("[INFO] Validazione invoice su HUB: disabilitata.", "warn")
+
+                # Validazione payment vs HUB
+                _validate_pay = os.getenv("JIRA_VALIDATE_PAYMENT", "true").lower() not in {"false", "0", "no", "n"}
+                if _validate_pay:
+                    self._enqueue_log("[INFO] Validazione payment su HUB...", "info")
+                    hub_ok = _jira_validate_payment_hub(zip_paths, self._enqueue_log)
+                    if not hub_ok:
+                        self.after(0, self._crea_err,
+                                   "Validazione payment fallita — ticket non creato.")
+                        return
+                else:
+                    self._enqueue_log("[INFO] Validazione payment su HUB: disabilitata.", "warn")
 
             # ── Step 2: Crea ticket (senza assegnatario) ──────────────────
             payload = {"fields": {
