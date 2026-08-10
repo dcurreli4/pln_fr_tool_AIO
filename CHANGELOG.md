@@ -1,3 +1,9 @@
+### v1.6.14 — 2026-08-10
+- **Kraken Full Data Extractor**: aggiunto flusso "Invoice B2B" (ELEC + GAS) — delta load su `finalized_at` verso `j_kraken_invoice_b2b`, query `B2B_INVOICE_ELEC` / `B2B_INVOICE_GAS` da `hub_config_query_kraken`
+- **Validator / Jira Ticket Creator**: check HUB per fatture B2B ora usa `j_kraken_invoice_b2b`; campo importo `payment_amount` per KF, `gross_amount` per KM; fix parsing `template_vars_json` in formato Python dict (apici singoli) tramite `ast.literal_eval`
+- **Validator**: aggiunto try/except esplicito attorno al check HUB per loggare errori invece di propagarli silenziosamente
+- **Refactoring**: estratta `_invoice_check_hub` come funzione condivisa tra Validator e Jira Ticket Creator; connessione HUB aperta una sola volta per tutte le entry nel Validator
+
 ### v1.6.13 — 2026-08-07
 - **Kraken Full Data Extractor — Payment**: introdotto delta load su `updated_at` (come Invoice su `finalized_at`) — cancella i record dell'ultimo giorno e ricarica da Kraken solo il delta; full load se la tabella è vuota; i flow ELEC e GAS sono gestiti separatamente tramite `commodity`
 

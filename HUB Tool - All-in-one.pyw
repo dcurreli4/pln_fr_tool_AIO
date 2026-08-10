@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.13"
+VERSION_LAUNCHER = "1.6.14"
 
 
 _REQUIRED = {
@@ -2127,8 +2127,10 @@ _ADE_TARGET_TABLES = {
     "query_pp_elec.sql":      "j_kraken_payment_plan",
     "query_pp_gas.sql":       "j_kraken_payment_plan",
     "query_renewal.sql":      "j_kraken_renewal",
-    "query_invoice_elec.sql": "j_kraken_invoice",
-    "query_invoice_gas.sql":  "j_kraken_invoice",
+    "query_invoice_elec.sql":     "j_kraken_invoice",
+    "query_invoice_gas.sql":      "j_kraken_invoice",
+    "query_invoice_b2b_elec.sql": "j_kraken_invoice_b2b",
+    "query_invoice_b2b_gas.sql":  "j_kraken_invoice_b2b",
     "query_payment_elec.sql": "j_kraken_payments",
     "query_payment_gas.sql":  "j_kraken_payments",
     "query_cheque_energie.sql":     "j_cheque_energie_registrati",
@@ -2141,8 +2143,10 @@ _ADE_QUERY_FLAGS = {
     "query_pp_elec.sql":      "ADE_RUN_PP_ELEC",
     "query_pp_gas.sql":       "ADE_RUN_PP_GAS",
     "query_renewal.sql":      "ADE_RUN_RENEWAL",
-    "query_invoice_elec.sql": "ADE_RUN_INVOICE_ELEC",
-    "query_invoice_gas.sql":  "ADE_RUN_INVOICE_GAS",
+    "query_invoice_elec.sql":     "ADE_RUN_INVOICE_ELEC",
+    "query_invoice_gas.sql":      "ADE_RUN_INVOICE_GAS",
+    "query_invoice_b2b_elec.sql": "ADE_RUN_INVOICE_B2B_ELEC",
+    "query_invoice_b2b_gas.sql":  "ADE_RUN_INVOICE_B2B_GAS",
     "query_payment_elec.sql": "ADE_RUN_PAYMENT_ELEC",
     "query_payment_gas.sql":  "ADE_RUN_PAYMENT_GAS",
     "query_cheque_energie.sql":     "ADE_RUN_CHEQUE_ENERGIE",
@@ -2155,8 +2159,10 @@ _ADE_QUERY_LABELS = {
     "query_pp_elec.sql":      "Payment Plan Elec",
     "query_pp_gas.sql":       "Payment Plan Gas",
     "query_renewal.sql":      "Renewal",
-    "query_invoice_elec.sql": "Invoice Elec",
-    "query_invoice_gas.sql":  "Invoice Gas",
+    "query_invoice_elec.sql":     "Invoice Elec",
+    "query_invoice_gas.sql":      "Invoice Gas",
+    "query_invoice_b2b_elec.sql": "Invoice B2B Elec",
+    "query_invoice_b2b_gas.sql":  "Invoice B2B Gas",
     "query_payment_elec.sql": "Payment Elec",
     "query_payment_gas.sql":  "Payment Gas",
     "query_cheque_energie.sql":     "Cheque Energie KJ",
@@ -2170,6 +2176,7 @@ _ADE_UI_ROWS = [
     ("Payment Plan",    ["query_pp_elec.sql", "query_pp_gas.sql"]),
     ("Renewal",         ["query_renewal.sql"]),
     ("Invoice",         ["query_invoice_elec.sql", "query_invoice_gas.sql"]),
+    ("Invoice B2B",     ["query_invoice_b2b_elec.sql", "query_invoice_b2b_gas.sql"]),
     ("Payment",         ["query_payment_elec.sql", "query_payment_gas.sql"]),
     ("Cheque Energie KJ", ["query_cheque_energie.sql"]),
     ("Cheque Energie KH", ["query_cheque_energie_kh.sql"]),
@@ -2179,6 +2186,8 @@ _ADE_UI_ROWS = [
 # aggiungendo i payment con query dedicate (SPLUS)
 _ADE_HUB_META_QUERIES = {
     **_HUB_META_QUERIES,
+    "query_invoice_b2b_elec.sql": "B2B_INVOICE_ELEC",
+    "query_invoice_b2b_gas.sql":  "B2B_INVOICE_GAS",
     "query_payment_elec.sql": "QUERY_PAYMENTS_ELEC_SPLUS",
     "query_payment_gas.sql":  "QUERY_PAYMENTS_GAS_SPLUS",
     "query_cheque_energie.sql":     "CHEQUE_ENERGIE_REGISTER",
@@ -2196,8 +2205,10 @@ _ADE_TIME_KEYS = {
     "query_pp_elec.sql":      "ADE_TIME_PP_ELEC",
     "query_pp_gas.sql":       "ADE_TIME_PP_GAS",
     "query_renewal.sql":      "ADE_TIME_RENEWAL",
-    "query_invoice_elec.sql": "ADE_TIME_INVOICE_ELEC",
-    "query_invoice_gas.sql":  "ADE_TIME_INVOICE_GAS",
+    "query_invoice_elec.sql":     "ADE_TIME_INVOICE_ELEC",
+    "query_invoice_gas.sql":      "ADE_TIME_INVOICE_GAS",
+    "query_invoice_b2b_elec.sql": "ADE_TIME_INVOICE_B2B_ELEC",
+    "query_invoice_b2b_gas.sql":  "ADE_TIME_INVOICE_B2B_GAS",
     "query_payment_elec.sql": "ADE_TIME_PAYMENT_ELEC",
     "query_payment_gas.sql":  "ADE_TIME_PAYMENT_GAS",
     "query_cheque_energie.sql":     "ADE_TIME_CHEQUE_ENERGIE",
@@ -2324,9 +2335,14 @@ def run_ade_pipeline(flags, log, on_done, app=None):
 
         # Prefissi identifier per il delta invoice
         _INVOICE_ID_PREFIX = {
-            "query_invoice_elec.sql": "EB",
-            "query_invoice_gas.sql":  "GB",
+            "query_invoice_elec.sql":     "EB",
+            "query_invoice_gas.sql":      "GB",
+            "query_invoice_b2b_elec.sql": "EB2B",
+            "query_invoice_b2b_gas.sql":  "GB2B",
         }
+
+        # Tabella delta per invoice B2B
+        _INVOICE_B2B_FLOWS = {"query_invoice_b2b_elec.sql", "query_invoice_b2b_gas.sql"}
 
         # Commodity per il delta payment
         _PAYMENT_COMMODITY = {
@@ -2352,14 +2368,15 @@ def run_ade_pipeline(flags, log, on_done, app=None):
 
             log(f"\n── {lbl}  [RUN] ──", "section")
 
-            # ── Invoice: delta load ───────────────────────────────────────
+            # ── Invoice (B2C e B2B): delta load ──────────────────────────
             if flow in _INVOICE_ID_PREFIX:
-                prefix      = _INVOICE_ID_PREFIX[flow]
-                date_filter = None
+                prefix       = _INVOICE_ID_PREFIX[flow]
+                inv_table    = "j_kraken_invoice_b2b" if flow in _INVOICE_B2B_FLOWS else "j_kraken_invoice"
+                date_filter  = None
                 try:
                     cur = hub_conn.cursor()
                     cur.execute(
-                        "SELECT MAX(finalized_at)::date::text FROM j_kraken_invoice "
+                        f"SELECT MAX(finalized_at)::date::text FROM {inv_table} "
                         "WHERE identifier LIKE %s",
                         (f"{prefix}%",),
                     )
@@ -2375,7 +2392,7 @@ def run_ade_pipeline(flags, log, on_done, app=None):
                     try:
                         cur = hub_conn.cursor()
                         cur.execute(
-                            "DELETE FROM j_kraken_invoice "
+                            f"DELETE FROM {inv_table} "
                             "WHERE identifier LIKE %s AND finalized_at::date >= %s",
                             (f"{prefix}%", max_date),
                         )
@@ -2503,9 +2520,9 @@ def run_ade_pipeline(flags, log, on_done, app=None):
                     columns = ["supply_point" if c == "prm" else c for c in columns]
                 elif flow == "query_pp_gas.sql":
                     columns = ["supply_point" if c == "pce" else c for c in columns]
-                elif flow == "query_invoice_elec.sql":
+                elif flow in ("query_invoice_elec.sql", "query_invoice_b2b_elec.sql"):
                     columns = ["supply_point" if c == "prm" else c for c in columns]
-                elif flow == "query_invoice_gas.sql":
+                elif flow in ("query_invoice_gas.sql", "query_invoice_b2b_gas.sql"):
                     columns = ["supply_point" if c == "pce" else c for c in columns]
                 elif flow == "query_payment_elec.sql":
                     columns = ["supply_point" if c == "prm_id" else c for c in columns]
@@ -5660,7 +5677,15 @@ class FileValidator(_AppBase):
             self._enqueue_log("[WARN] Nessuna cartella caricata.", "warn")
             self.after(0, lambda: self._on_done(success=False))
             return
-        all_ok  = True
+        all_ok   = True
+        hub_conn = None
+        try:
+            _reload_env()
+            hub_conn = get_hub_connection()
+        except Exception as e:
+            self._enqueue_log(f"[ERRORE] Connessione HUB: {e}", "error")
+            self.after(0, lambda: self._on_done(success=False))
+            return
 
         for entry in folders:
             entry_path = Path(entry)
@@ -5838,60 +5863,25 @@ class FileValidator(_AppBase):
                     self._enqueue_log("[ERRORE] Reference miste B2C e B2B non ammesse.", "error")
                     all_ok = False
                 elif b2b:
-                    self._enqueue_log("[OK] Fatture B2B — validazione HUB saltata.", "ok")
-                else:
-                    self._enqueue_log("[INFO] Connessione HUB in corso...", "info")
+                    b2b_amount_field = "payment_amount" if tipo == "KF" else "gross_amount"
                     try:
-                        _reload_env()
-                        hub_conn = get_hub_connection()
-                        try:
-                            ref_list = list(references)
-                            cur = hub_conn.cursor()
-                            cur.execute(
-                                "SELECT identifier, "
-                                "(template_vars_json::json#>>'{sumup,gross_amount}')::numeric "
-                                "FROM j_kraken_invoice WHERE identifier = ANY(%s)",
-                                (ref_list,),
-                            )
-                            found        = set()
-                            kraken_total = 0.0
-                            for row in cur.fetchall():
-                                identifier, gross = row[0], row[1]
-                                if identifier:
-                                    found.add(identifier)
-                                if gross is not None:
-                                    try:
-                                        kraken_total += float(gross)
-                                    except (TypeError, ValueError):
-                                        pass
-                            cur.close()
-                        finally:
-                            hub_conn.close()
-
-                        missing = references - found
-                        if missing:
-                            self._enqueue_log(
-                                f"[ERRORE] Trovate su HUB: {len(found)}/{len(references)}  |  "
-                                f"Mancanti: {len(missing)}", "error")
-                            all_ok = False
-                        else:
-                            self._enqueue_log(
-                                f"[OK] Trovate su HUB: {len(found)}/{len(references)}", "ok")
-
-                        # Confronto totali
-                        if abs(kraken_total - total) < 0.01:
-                            self._enqueue_log(
-                                f"[OK] Totale HUB: {kraken_total:.2f}  |  "
-                                f"Totale file: {total:.2f}  |  Corrispondono", "ok")
-                        else:
-                            self._enqueue_log(
-                                f"[ERRORE] Totale HUB: {kraken_total:.2f}  |  "
-                                f"Totale file: {total:.2f}  |  Differenza: {abs(kraken_total - total):.2f}",
-                                "error")
+                        if not _invoice_check_hub(hub_conn, references, total, self._enqueue_log,
+                                                  table="j_kraken_invoice_b2b",
+                                                  amount_field=b2b_amount_field):
                             all_ok = False
                     except Exception as e:
-                        self._enqueue_log(f"[ERRORE] {e}", "error")
+                        self._enqueue_log(f"[ERRORE] Validazione B2B: {e}", "error")
                         all_ok = False
+                else:
+                    try:
+                        if not _invoice_check_hub(hub_conn, references, total, self._enqueue_log):
+                            all_ok = False
+                    except Exception as e:
+                        self._enqueue_log(f"[ERRORE] Validazione HUB: {e}", "error")
+                        all_ok = False
+
+        if hub_conn:
+            hub_conn.close()
 
         if all_ok:
             self._enqueue_log("\n[OK] Validazione completata con successo.", "ok")
@@ -10694,6 +10684,57 @@ def _jira_validate_zip_structure(all_entries):
 _JIRA_INVOICE_TYPES = {"KF", "KR", "KM", "KK"}
 
 
+def _invoice_check_hub(hub_conn, references: set, file_total: float, log_fn, label: str = "", table: str = "j_kraken_invoice", amount_field: str = "gross_amount") -> bool:
+    """
+    Verifica le reference su j_kraken_invoice (o j_kraken_invoice_b2b) e confronta il totale.
+    amount_field: campo JSON sotto sumup da usare per il totale (gross_amount o payment_amount).
+    Ritorna True se tutto ok, False se ci sono errori.
+    hub_conn deve essere già aperta dal chiamante.
+    """
+    import ast as _ast
+    prefix = f"{label}  |  " if label else ""
+    cur = hub_conn.cursor()
+    cur.execute(
+        f"SELECT identifier, template_vars_json FROM {table} WHERE identifier = ANY(%s)",
+        (list(references),),
+    )
+    found        = set()
+    kraken_total = 0.0
+    for row in cur.fetchall():
+        identifier, tvj = row[0], row[1]
+        if identifier:
+            found.add(identifier)
+        if tvj:
+            try:
+                d = _ast.literal_eval(tvj) if isinstance(tvj, str) else tvj
+                val = d.get("sumup", {}).get(amount_field)
+                if val is not None:
+                    kraken_total += float(val)
+            except Exception:
+                pass
+    cur.close()
+
+    all_ok  = True
+    missing = references - found
+    if missing:
+        log_fn(f"[ERRORE] {prefix}Trovate su HUB: {len(found)}/{len(references)}  |  "
+               f"Mancanti: {len(missing)}", "error")
+        all_ok = False
+    else:
+        log_fn(f"[OK] {prefix}Trovate su HUB: {len(found)}/{len(references)}", "ok")
+
+    if abs(kraken_total - file_total) < 0.01:
+        log_fn(f"[OK] {prefix}Totale HUB: {kraken_total:.2f}  |  "
+               f"Totale file: {file_total:.2f}  |  Corrispondono", "ok")
+    else:
+        log_fn(f"[ERRORE] {prefix}Totale HUB: {kraken_total:.2f}  |  "
+               f"Totale file: {file_total:.2f}  |  "
+               f"Differenza: {abs(kraken_total - file_total):.2f}", "error")
+        all_ok = False
+
+    return all_ok
+
+
 def _jira_validate_invoice_hub(zip_paths, log_fn):
     """
     Valida i file invoice contenuti negli ZIP contro j_kraken_invoice su HUB.
@@ -10767,49 +10808,13 @@ def _jira_validate_invoice_hub(zip_paths, log_fn):
                         log_fn(f"[ERRORE] {zip_name} — Reference miste B2C e B2B non ammesse.", "error")
                         all_ok = False
                         continue
-                    if b2b:
-                        log_fn(f"[OK] {zip_name} — Fatture B2B, validazione HUB saltata.", "ok")
-                        continue
 
-                    # Query HUB per questo ZIP (solo B2C)
-                    cur = hub_conn.cursor()
-                    cur.execute(
-                        "SELECT identifier, "
-                        "(template_vars_json::json#>>'{sumup,gross_amount}')::numeric "
-                        "FROM j_kraken_invoice WHERE identifier = ANY(%s)",
-                        (list(zip_references),),
-                    )
-                    found        = set()
-                    kraken_total = 0.0
-                    for row in cur.fetchall():
-                        identifier, gross = row[0], row[1]
-                        if identifier:
-                            found.add(identifier)
-                        if gross is not None:
-                            try:
-                                kraken_total += float(gross)
-                            except (TypeError, ValueError):
-                                pass
-                    cur.close()
-
-                    missing = zip_references - found
-                    if missing:
-                        log_fn(
-                            f"[ERRORE] {zip_name}  |  Trovate su HUB: {len(found)}/{len(zip_references)}  |  "
-                            f"Mancanti: {len(missing)}", "error")
-                        all_ok = False
-                    else:
-                        log_fn(f"[OK] {zip_name}  |  Trovate su HUB: {len(found)}/{len(zip_references)}", "ok")
-
-                    if abs(kraken_total - zip_total) < 0.01:
-                        log_fn(
-                            f"[OK] {zip_name}  |  Totale HUB: {kraken_total:.2f}  |  "
-                            f"Totale file: {zip_total:.2f}  |  Corrispondono", "ok")
-                    else:
-                        log_fn(
-                            f"[ERRORE] {zip_name}  |  Totale HUB: {kraken_total:.2f}  |  "
-                            f"Totale file: {zip_total:.2f}  |  Differenza: {abs(kraken_total - zip_total):.2f}",
-                            "error")
+                    # Query HUB per questo ZIP (B2C o B2B)
+                    hub_table = "j_kraken_invoice_b2b" if b2b else "j_kraken_invoice"
+                    zip_tipo  = _jira_detect_file_type(invoice_files[0]) if invoice_files else None
+                    b2b_amount_field = "payment_amount" if (b2b and zip_tipo == "KF") else "gross_amount"
+                    if not _invoice_check_hub(hub_conn, zip_references, zip_total, log_fn, zip_name,
+                                             hub_table, b2b_amount_field):
                         all_ok = False
 
             except Exception as e:
