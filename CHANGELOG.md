@@ -1,3 +1,11 @@
+### v1.6.18 — 2026-08-11
+- **Kraken Full Data Extractor**: aggiunto flusso "Allocation B2B" (ELEC + GAS) — delta load su `updated_at` verso `j_kraken_allocation_b2b`, query `B2B_ALLOCATION_PWR` / `B2B_ALLOCATION_GAS` da `hub_config_query_kraken`; rename `prm_id`/`pce_id` → `supply_point`, inserimento colonna `commodity`
+- **Validator — Payment**: aggiunta regex `_PAY_BU_RE` per file Allocation B2B (prefisso `BU`) — riconosciuti e skippati; corretta regex `_PAY_B2B_RE` (prefisso `BC`, più permissiva su lunghezza segmenti)
+- **Validator — Payment / Jira Ticket Creator**: implementata validazione B2B su `j_kraken_payments_b2b` — stesso flusso B2C, tabella parametrizzata in `_pay_check_hub`
+- **`_pay_check_hub`**: fix estrazione reference — ora presa direttamente dalle tuple `(r, d, s)` invece che via regex sulla chiave stringa (evita parsing errato su reference contenenti `D` + cifre)
+- **`_pay_check_hub`**: fix `payment_date` per B2B — cast `::date` prima di `::text` per eliminare l'orario (`2025-06-04 00:00:00` → `20250604`)
+- **Hub Console**: reload flag immediato al cambio ambiente (poll ogni 2s su `TARGET_ENV`)
+
 ### v1.6.17 — 2026-08-11
 - **Refactoring — Payment KJ/KH**: estratte `_kj_aggregate_lines`, `_kj_check_hub`, `_kh_aggregate_lines`, `_kh_check_hub` come funzioni condivise module-level (stesso pattern di `_pay_aggregate_lines`/`_pay_check_hub`)
 - **Validator — Payment**: blocchi KJ e KH ora usano le funzioni condivise invece di logica inline

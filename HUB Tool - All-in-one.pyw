@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.17"
+VERSION_LAUNCHER = "1.6.18"
 
 
 _REQUIRED = {
@@ -2134,8 +2134,10 @@ _ADE_TARGET_TABLES = {
     "query_invoice_b2b_gas.sql":  "j_kraken_invoice_b2b",
     "query_payment_elec.sql":     "j_kraken_payments",
     "query_payment_gas.sql":      "j_kraken_payments",
-    "query_payment_b2b_elec.sql": "j_kraken_payments_b2b",
-    "query_payment_b2b_gas.sql":  "j_kraken_payments_b2b",
+    "query_payment_b2b_elec.sql":     "j_kraken_payments_b2b",
+    "query_payment_b2b_gas.sql":      "j_kraken_payments_b2b",
+    "query_allocation_b2b_elec.sql":  "j_kraken_allocation_b2b",
+    "query_allocation_b2b_gas.sql":   "j_kraken_allocation_b2b",
     "query_cheque_energie.sql":     "j_cheque_energie_registrati",
     "query_cheque_energie_kh.sql": "j_cheque_energie_utilizzati",
 }
@@ -2152,8 +2154,10 @@ _ADE_QUERY_FLAGS = {
     "query_invoice_b2b_gas.sql":  "ADE_RUN_INVOICE_B2B_GAS",
     "query_payment_elec.sql":     "ADE_RUN_PAYMENT_ELEC",
     "query_payment_gas.sql":      "ADE_RUN_PAYMENT_GAS",
-    "query_payment_b2b_elec.sql": "ADE_RUN_PAYMENT_B2B_ELEC",
-    "query_payment_b2b_gas.sql":  "ADE_RUN_PAYMENT_B2B_GAS",
+    "query_payment_b2b_elec.sql":     "ADE_RUN_PAYMENT_B2B_ELEC",
+    "query_payment_b2b_gas.sql":      "ADE_RUN_PAYMENT_B2B_GAS",
+    "query_allocation_b2b_elec.sql":  "ADE_RUN_ALLOCATION_B2B_ELEC",
+    "query_allocation_b2b_gas.sql":   "ADE_RUN_ALLOCATION_B2B_GAS",
     "query_cheque_energie.sql":     "ADE_RUN_CHEQUE_ENERGIE",
     "query_cheque_energie_kh.sql": "ADE_RUN_CHEQUE_ENERGIE_KH",
 }
@@ -2170,8 +2174,10 @@ _ADE_QUERY_LABELS = {
     "query_invoice_b2b_gas.sql":  "Invoice B2B Gas",
     "query_payment_elec.sql":     "Payment Elec",
     "query_payment_gas.sql":      "Payment Gas",
-    "query_payment_b2b_elec.sql": "Payment B2B Elec",
-    "query_payment_b2b_gas.sql":  "Payment B2B Gas",
+    "query_payment_b2b_elec.sql":     "Payment B2B Elec",
+    "query_payment_b2b_gas.sql":      "Payment B2B Gas",
+    "query_allocation_b2b_elec.sql":  "Allocation B2B Elec",
+    "query_allocation_b2b_gas.sql":   "Allocation B2B Gas",
     "query_cheque_energie.sql":     "Cheque Energie KJ",
     "query_cheque_energie_kh.sql": "Cheque Energie KH",
 }
@@ -2185,7 +2191,8 @@ _ADE_UI_ROWS = [
     ("Invoice",         ["query_invoice_elec.sql", "query_invoice_gas.sql"]),
     ("Invoice B2B",     ["query_invoice_b2b_elec.sql", "query_invoice_b2b_gas.sql"]),
     ("Payment",         ["query_payment_elec.sql", "query_payment_gas.sql"]),
-    ("Payment B2B",     ["query_payment_b2b_elec.sql", "query_payment_b2b_gas.sql"]),
+    ("Payment B2B",      ["query_payment_b2b_elec.sql", "query_payment_b2b_gas.sql"]),
+    ("Allocation B2B",   ["query_allocation_b2b_elec.sql", "query_allocation_b2b_gas.sql"]),
     ("Cheque Energie KJ", ["query_cheque_energie.sql"]),
     ("Cheque Energie KH", ["query_cheque_energie_kh.sql"]),
 ]
@@ -2198,8 +2205,10 @@ _ADE_HUB_META_QUERIES = {
     "query_invoice_b2b_gas.sql":  "B2B_INVOICE_GAS",
     "query_payment_elec.sql":     "QUERY_PAYMENTS_ELEC_SPLUS",
     "query_payment_gas.sql":      "QUERY_PAYMENTS_GAS_SPLUS",
-    "query_payment_b2b_elec.sql": "B2B_PAYMENT_ELEC",
-    "query_payment_b2b_gas.sql":  "B2B_PAYMENT_GAS",
+    "query_payment_b2b_elec.sql":     "B2B_PAYMENT_ELEC",
+    "query_payment_b2b_gas.sql":      "B2B_PAYMENT_GAS",
+    "query_allocation_b2b_elec.sql":  "B2B_ALLOCATION_PWR",
+    "query_allocation_b2b_gas.sql":   "B2B_ALLOCATION_GAS",
     "query_cheque_energie.sql":     "CHEQUE_ENERGIE_REGISTER",
     "query_cheque_energie_kh.sql": "CHEQUE_ENERGIE_USE",
 }
@@ -2221,8 +2230,10 @@ _ADE_TIME_KEYS = {
     "query_invoice_b2b_gas.sql":  "ADE_TIME_INVOICE_B2B_GAS",
     "query_payment_elec.sql":     "ADE_TIME_PAYMENT_ELEC",
     "query_payment_gas.sql":      "ADE_TIME_PAYMENT_GAS",
-    "query_payment_b2b_elec.sql": "ADE_TIME_PAYMENT_B2B_ELEC",
-    "query_payment_b2b_gas.sql":  "ADE_TIME_PAYMENT_B2B_GAS",
+    "query_payment_b2b_elec.sql":     "ADE_TIME_PAYMENT_B2B_ELEC",
+    "query_payment_b2b_gas.sql":      "ADE_TIME_PAYMENT_B2B_GAS",
+    "query_allocation_b2b_elec.sql":  "ADE_TIME_ALLOCATION_B2B_ELEC",
+    "query_allocation_b2b_gas.sql":   "ADE_TIME_ALLOCATION_B2B_GAS",
     "query_cheque_energie.sql":     "ADE_TIME_CHEQUE_ENERGIE",
     "query_cheque_energie_kh.sql": "ADE_TIME_CHEQUE_ENERGIE_KH",
 }
@@ -2356,12 +2367,14 @@ def run_ade_pipeline(flags, log, on_done, app=None):
         # Tabella delta per invoice B2B
         _INVOICE_B2B_FLOWS = {"query_invoice_b2b_elec.sql", "query_invoice_b2b_gas.sql"}
 
-        # Commodity per il delta payment (B2C e B2B)
+        # Commodity per il delta payment (B2C e B2B) e allocation B2B
         _PAYMENT_COMMODITY = {
-            "query_payment_elec.sql":     "ELEC",
-            "query_payment_gas.sql":      "GAS",
-            "query_payment_b2b_elec.sql": "ELEC",
-            "query_payment_b2b_gas.sql":  "GAS",
+            "query_payment_elec.sql":         "ELEC",
+            "query_payment_gas.sql":          "GAS",
+            "query_payment_b2b_elec.sql":     "ELEC",
+            "query_payment_b2b_gas.sql":      "GAS",
+            "query_allocation_b2b_elec.sql":  "ELEC",
+            "query_allocation_b2b_gas.sql":   "GAS",
         }
 
         for flow, flag_key in _ADE_QUERY_FLAGS.items():
@@ -2538,11 +2551,13 @@ def run_ade_pipeline(flags, log, on_done, app=None):
                     columns = ["supply_point" if c == "prm" else c for c in columns]
                 elif flow in ("query_invoice_gas.sql", "query_invoice_b2b_gas.sql"):
                     columns = ["supply_point" if c == "pce" else c for c in columns]
-                elif flow in ("query_payment_elec.sql", "query_payment_b2b_elec.sql"):
-                    columns = ["supply_point" if c == "prm_id" else c for c in columns]
+                elif flow in ("query_payment_elec.sql", "query_payment_b2b_elec.sql",
+                              "query_allocation_b2b_elec.sql"):
+                    columns = ["supply_point" if c in ("prm_id", "pce_id") else c for c in columns]
                     columns = columns + ["commodity"]
-                elif flow in ("query_payment_gas.sql", "query_payment_b2b_gas.sql"):
-                    columns = ["supply_point" if c == "pce_id" else c for c in columns]
+                elif flow in ("query_payment_gas.sql", "query_payment_b2b_gas.sql",
+                              "query_allocation_b2b_gas.sql"):
+                    columns = ["supply_point" if c in ("pce_id", "prm_id") else c for c in columns]
                     columns = columns + ["commodity"]
 
                 # Valore commodity da aggiungere a ogni riga
@@ -2861,6 +2876,7 @@ class HubConsole(_AppBase):
         self._running    = False
         self._flag_vars  = {}   # hkey -> BooleanVar
         self._flag_boxes = {}   # hkey -> Label (checkbox widget)
+        self._last_env = _get_target_env()
         self._build_ui()
         self._load_flags_from_hub()
         self._poll_log()
@@ -2991,12 +3007,25 @@ class HubConsole(_AppBase):
         self._build_log_panel(right, on_clear=self._clear_log)
 
     def _schedule_flag_refresh(self):
-        """Rilegge i flag da HUB ogni 30 secondi in background."""
+        """Rilegge i flag da HUB ogni 30 secondi, o immediatamente se l'ambiente è cambiato."""
         def _refresh():
-            threading.Thread(target=self._load_flags_from_hub,
-                             daemon=True).start()
+            current_env = _get_target_env()
+            if current_env != self._last_env:
+                self._last_env = current_env
+                self._status_var.set(f"Ambiente cambiato → {current_env}, ricarico flag...")
+                threading.Thread(target=self._load_flags_from_hub,
+                                 daemon=True).start()
             self._refresh_job = self.after(30_000, _refresh)
-        self._refresh_job = self.after(30_000, _refresh)
+        def _poll_env():
+            current_env = _get_target_env()
+            if current_env != self._last_env:
+                self._last_env = current_env
+                self._status_var.set(f"Ambiente cambiato → {current_env}, ricarico flag...")
+                threading.Thread(target=self._load_flags_from_hub,
+                                 daemon=True).start()
+            self._env_poll_job = self.after(2_000, _poll_env)
+        self._refresh_job   = self.after(30_000, _refresh)
+        self._env_poll_job  = self.after(2_000, _poll_env)
 
     def _get_int_conn(self):
         """Apre tunnel SSH e restituisce (tunnel, conn) per l'ambiente corrente."""
@@ -5396,10 +5425,11 @@ class FolderCleaner(_AppBase):
 _FV_TXT = _HERE / "input" / "validator" / "folders.txt"
 
 import re as _fv_re
-_PAY_B2B_RE = _fv_re.compile(r'^(KE|KG)_[A-Z0-9]{2}_BC\d{10}_\d{8}\.csv$', _fv_re.IGNORECASE)
-_PAY_B2C_RE = _fv_re.compile(r'^(KE|KG)_[A-Z0-9]{2}_[A-Z]_\d{10}_\d{8}\.csv$', _fv_re.IGNORECASE)
-_PAY_KH_RE  = _fv_re.compile(r'^CE_KH_[A-Z]_\d{10}_\d{8}\.csv$', _fv_re.IGNORECASE)
-_PAY_KJ_RE  = _fv_re.compile(r'^CE_KJ_[A-Z]_\d{10}_\d{8}\.csv$', _fv_re.IGNORECASE)
+_PAY_B2B_RE  = _fv_re.compile(r'^(KE|KG)_[A-Z0-9]+_BC\d+_\d{8}\.csv$',      _fv_re.IGNORECASE)
+_PAY_BU_RE   = _fv_re.compile(r'^(KE|KG)_[A-Z0-9]+_BU_\d+_\d{8}\.csv$',      _fv_re.IGNORECASE)
+_PAY_B2C_RE  = _fv_re.compile(r'^(KE|KG)_[A-Z0-9]{2}_[A-Z]_\d{10}_\d{8}\.csv$', _fv_re.IGNORECASE)
+_PAY_KH_RE   = _fv_re.compile(r'^CE_KH_[A-Z]_\d{10}_\d{8}\.csv$',             _fv_re.IGNORECASE)
+_PAY_KJ_RE   = _fv_re.compile(r'^CE_KJ_[A-Z]_\d{10}_\d{8}\.csv$',             _fv_re.IGNORECASE)
 
 
 class FileValidator(_AppBase):
@@ -5732,12 +5762,15 @@ class FileValidator(_AppBase):
                 continue
 
             b2b_files = [f for f in files if _PAY_B2B_RE.match(f.name)]
+            bu_files  = [f for f in files if _PAY_BU_RE.match(f.name)]
             b2c_files = [f for f in files if _PAY_B2C_RE.match(f.name)
-                         and not _PAY_B2B_RE.match(f.name)]
+                         and not _PAY_B2B_RE.match(f.name)
+                         and not _PAY_BU_RE.match(f.name)]
             kh_files  = [f for f in files if _PAY_KH_RE.match(f.name)]
             kj_files  = [f for f in files if _PAY_KJ_RE.match(f.name)]
             unknown   = [f.name for f in files
                          if not _PAY_B2B_RE.match(f.name)
+                         and not _PAY_BU_RE.match(f.name)
                          and not _PAY_B2C_RE.match(f.name)
                          and not _PAY_KH_RE.match(f.name)
                          and not _PAY_KJ_RE.match(f.name)]
@@ -5794,45 +5827,46 @@ class FileValidator(_AppBase):
                     self._enqueue_log(f"[ERRORE] Validazione HUB KH: {e}", "error")
                     all_ok = False
 
+            if bu_files:
+                self._enqueue_log(f"[OK] Tipo: Allocation B2B (BU)  |  {len(bu_files)} file  |  Validazione HUB: skippata.", "ok")
+
             if b2b_files and b2c_files:
                 self._enqueue_log("[ERRORE] File B2B e B2C misti non ammessi.", "error")
                 all_ok = False
                 continue
 
-            if b2b_files:
-                self._enqueue_log(f"[OK] Tipo: B2B  |  {len(b2b_files)} file  |  Validazione HUB: skippata.", "ok")
-                continue
+            pay_files_to_validate = b2b_files or b2c_files
+            if pay_files_to_validate:
+                tipo  = "B2B" if b2b_files else "B2C"
+                table = "j_kraken_payments_b2b" if b2b_files else "j_kraken_payments"
+                count = len(pay_files_to_validate)
+                self._enqueue_log(f"[INFO] Lettura e aggregazione di {count} file {tipo}...", "info")
+                aggregated: dict = {}
+                key_source: dict = {}
+                for f in pay_files_to_validate:
+                    agg, ks, errs = _pay_aggregate_lines(f.read_text(encoding="utf-8").splitlines(), f.name)
+                    for k, v in agg.items():
+                        aggregated[k] = aggregated.get(k, 0.0) + v
+                    key_source.update(ks)
+                    if errs:
+                        self._enqueue_log(f"[WARN] Impossibile leggere: {f.name}", "warn")
 
-            # ── B2C: aggrega per (reference, payment_date) sommando amount ──
-            tipo  = "B2C"
-            count = len(b2c_files)
-            self._enqueue_log(f"[INFO] Lettura e aggregazione di {count} file B2C...", "info")
-            aggregated: dict = {}
-            key_source: dict = {}
-            for f in b2c_files:
-                agg, ks, errs = _pay_aggregate_lines(f.read_text(encoding="utf-8").splitlines(), f.name)
-                for k, v in agg.items():
-                    aggregated[k] = aggregated.get(k, 0.0) + v
-                key_source.update(ks)
-                if errs:
-                    self._enqueue_log(f"[WARN] Impossibile leggere: {f.name}", "warn")
-
-            keys          = {f"R{r}D{d}T{s}" for (r, d, s) in aggregated}
-            distinct_refs = {r for r, _, _ in aggregated}
-            total_amt     = sum(aggregated.values())
-            self._enqueue_log(
-                f"[INFO] Tipo: {tipo}  |  {count} file  |  "
-                f"Chiavi distinte: {len(keys)}  |  "
-                f"Reference distinte: {len(distinct_refs)}  |  "
-                f"Totale amount: {total_amt:.2f}", "info")
-            self._enqueue_log(f"[INFO] Ricerca {len(keys)} chiavi su HUB (j_kraken_payments)...", "info")
-
-            try:
-                if not _pay_check_hub(hub_conn, aggregated, key_source, self._enqueue_log):
+                keys          = {f"R{r}D{d}T{s}" for (r, d, s) in aggregated}
+                distinct_refs = {r for r, _, _ in aggregated}
+                total_amt     = sum(aggregated.values())
+                self._enqueue_log(
+                    f"[INFO] Tipo: {tipo}  |  {count} file  |  "
+                    f"Chiavi distinte: {len(keys)}  |  "
+                    f"Reference distinte: {len(distinct_refs)}  |  "
+                    f"Totale amount: {total_amt:.2f}", "info")
+                self._enqueue_log(f"[INFO] Ricerca {len(keys)} chiavi su HUB ({table})...", "info")
+                try:
+                    if not _pay_check_hub(hub_conn, aggregated, key_source, self._enqueue_log,
+                                          table=table):
+                        all_ok = False
+                except Exception as e:
+                    self._enqueue_log(f"[ERRORE] Validazione HUB {tipo}: {e}", "error")
                     all_ok = False
-            except Exception as e:
-                self._enqueue_log(f"[ERRORE] Validazione HUB: {e}", "error")
-                all_ok = False
 
         if hub_conn:
             hub_conn.close()
@@ -11025,14 +11059,12 @@ def _pay_aggregate_lines(lines, filename):
     return aggregated, key_source, parse_errors
 
 
-def _pay_check_hub(hub_conn, aggregated, key_source, log_fn, label=""):
+def _pay_check_hub(hub_conn, aggregated, key_source, log_fn, label="", table="j_kraken_payments"):
     """
-    Verifica le chiavi payment su j_kraken_payments e confronta i totali.
+    Verifica le chiavi payment su HUB e confronta i totali.
     Ritorna True se tutto ok, False se ci sono errori.
     """
-    import re as _re_pay
     prefix = f"{label}  |  " if label else ""
-    _key_re = _re_pay.compile(r'^R(.+)D\d{8}T(?:PAYMENT|REJECT)$')
 
     key_to_source   = {f"R{r}D{d}T{s}": key_source[(r, d, s)] for (r, d, s) in aggregated}
     key_to_file_amt = {f"R{r}D{d}T{s}": a for (r, d, s), a in aggregated.items()}
@@ -11042,16 +11074,16 @@ def _pay_check_hub(hub_conn, aggregated, key_source, log_fn, label=""):
     if not keys:
         return True
 
-    ref_values = list({m.group(1) for k in keys for m in [_key_re.match(k)] if m})
+    ref_values = list({r for r, d, s in aggregated})
     cur = hub_conn.cursor()
-    cur.execute("""
+    cur.execute(f"""
         SELECT DISTINCT p.key, jp.amount::numeric
         FROM unnest(%s::text[]) AS p(key)
-        JOIN j_kraken_payments jp
+        JOIN {table} jp
           ON (jp.reference = ANY(%s) OR jp.payment_id = ANY(%s))
          AND concat(
               'R', CASE WHEN jp.transaction_type = 'BACS_DEPOSIT' THEN jp.payment_id ELSE jp.reference END,
-              'D', replace(jp.payment_date::text, '-', ''),
+              'D', replace(jp.payment_date::date::text, '-', ''),
               'T', CASE WHEN jp.amount::numeric > 0 THEN 'PAYMENT' ELSE 'REJECT' END
           ) = p.key
     """, (list(keys), ref_values, ref_values))
@@ -11276,25 +11308,33 @@ def _jira_validate_payment_hub(zip_paths, log_fn):
                         continue
 
                     b2b_files = [n for n in pay_files if _PAY_B2B_RE.match(n)]
+                    bu_files  = [n for n in pay_files if _PAY_BU_RE.match(n)]
                     b2c_files = [n for n in pay_files
-                                 if _PAY_B2C_RE.match(n) and not _PAY_B2B_RE.match(n)]
+                                 if _PAY_B2C_RE.match(n)
+                                 and not _PAY_B2B_RE.match(n)
+                                 and not _PAY_BU_RE.match(n)]
                     kj_files  = [n for n in pay_files if _PAY_KJ_RE.match(n)]
                     kh_files  = [n for n in pay_files if _PAY_KH_RE.match(n)]
 
                     zip_entry_map = {_os.path.basename(e): e
                                      for e in all_entries if not e.endswith("/")}
 
-                    # ── B2C ────────────────────────────────────────────────
+                    # ── BU (Allocation B2B) ───────────────────────────────
+                    if bu_files:
+                        log_fn(f"[INFO] {zip_name} — {len(bu_files)} file Allocation B2B (BU): validazione HUB skippata.", "info")
+
+                    # ── B2B / B2C ─────────────────────────────────────────
                     if b2b_files and b2c_files:
                         log_fn(f"[ERRORE] {zip_name} — File B2B e B2C misti non ammessi.", "error")
                         all_ok = False
-                    elif b2b_files:
-                        log_fn(f"[INFO] {zip_name} — File B2B: validazione HUB skippata.", "info")
-                    elif b2c_files:
+                    elif b2b_files or b2c_files:
+                        pay_names = b2b_files or b2c_files
+                        tipo      = "B2B" if b2b_files else "B2C"
+                        table     = "j_kraken_payments_b2b" if b2b_files else "j_kraken_payments"
                         has_payment = True
                         aggregated: dict = {}
                         key_source: dict = {}
-                        for name in b2c_files:
+                        for name in pay_names:
                             try:
                                 content = z.read(zip_entry_map.get(name, name)).decode("utf-8")
                                 agg, ks, errs = _pay_aggregate_lines(content.splitlines(), name)
@@ -11307,10 +11347,11 @@ def _jira_validate_payment_hub(zip_paths, log_fn):
                                 log_fn(f"[WARN] {zip_name} — Impossibile leggere: {name}", "warn")
                         keys      = {f"R{r}D{d}T{s}" for (r, d, s) in aggregated}
                         total_amt = sum(aggregated.values())
-                        log_fn(f"[INFO] {zip_name}  |  Chiavi distinte: {len(keys)}  |  "
+                        log_fn(f"[INFO] {zip_name}  |  Tipo: {tipo}  |  Chiavi distinte: {len(keys)}  |  "
                                f"Totale amount: {total_amt:.2f}", "info")
-                        log_fn(f"[INFO] {zip_name} — Ricerca {len(keys)} chiavi su HUB (j_kraken_payments)...", "info")
-                        if not _pay_check_hub(hub_conn, aggregated, key_source, log_fn, zip_name):
+                        log_fn(f"[INFO] {zip_name} — Ricerca {len(keys)} chiavi su HUB ({table})...", "info")
+                        if not _pay_check_hub(hub_conn, aggregated, key_source, log_fn, zip_name,
+                                              table=table):
                             all_ok = False
 
                     # ── KJ ────────────────────────────────────────────────
