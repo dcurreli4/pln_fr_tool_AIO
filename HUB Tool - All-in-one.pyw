@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.16"
+VERSION_LAUNCHER = "1.6.17"
 
 
 _REQUIRED = {
@@ -2132,8 +2132,10 @@ _ADE_TARGET_TABLES = {
     "query_invoice_gas.sql":      "j_kraken_invoice",
     "query_invoice_b2b_elec.sql": "j_kraken_invoice_b2b",
     "query_invoice_b2b_gas.sql":  "j_kraken_invoice_b2b",
-    "query_payment_elec.sql": "j_kraken_payments",
-    "query_payment_gas.sql":  "j_kraken_payments",
+    "query_payment_elec.sql":     "j_kraken_payments",
+    "query_payment_gas.sql":      "j_kraken_payments",
+    "query_payment_b2b_elec.sql": "j_kraken_payments_b2b",
+    "query_payment_b2b_gas.sql":  "j_kraken_payments_b2b",
     "query_cheque_energie.sql":     "j_cheque_energie_registrati",
     "query_cheque_energie_kh.sql": "j_cheque_energie_utilizzati",
 }
@@ -2148,8 +2150,10 @@ _ADE_QUERY_FLAGS = {
     "query_invoice_gas.sql":      "ADE_RUN_INVOICE_GAS",
     "query_invoice_b2b_elec.sql": "ADE_RUN_INVOICE_B2B_ELEC",
     "query_invoice_b2b_gas.sql":  "ADE_RUN_INVOICE_B2B_GAS",
-    "query_payment_elec.sql": "ADE_RUN_PAYMENT_ELEC",
-    "query_payment_gas.sql":  "ADE_RUN_PAYMENT_GAS",
+    "query_payment_elec.sql":     "ADE_RUN_PAYMENT_ELEC",
+    "query_payment_gas.sql":      "ADE_RUN_PAYMENT_GAS",
+    "query_payment_b2b_elec.sql": "ADE_RUN_PAYMENT_B2B_ELEC",
+    "query_payment_b2b_gas.sql":  "ADE_RUN_PAYMENT_B2B_GAS",
     "query_cheque_energie.sql":     "ADE_RUN_CHEQUE_ENERGIE",
     "query_cheque_energie_kh.sql": "ADE_RUN_CHEQUE_ENERGIE_KH",
 }
@@ -2164,8 +2168,10 @@ _ADE_QUERY_LABELS = {
     "query_invoice_gas.sql":      "Invoice Gas",
     "query_invoice_b2b_elec.sql": "Invoice B2B Elec",
     "query_invoice_b2b_gas.sql":  "Invoice B2B Gas",
-    "query_payment_elec.sql": "Payment Elec",
-    "query_payment_gas.sql":  "Payment Gas",
+    "query_payment_elec.sql":     "Payment Elec",
+    "query_payment_gas.sql":      "Payment Gas",
+    "query_payment_b2b_elec.sql": "Payment B2B Elec",
+    "query_payment_b2b_gas.sql":  "Payment B2B Gas",
     "query_cheque_energie.sql":     "Cheque Energie KJ",
     "query_cheque_energie_kh.sql": "Cheque Energie KH",
 }
@@ -2179,6 +2185,7 @@ _ADE_UI_ROWS = [
     ("Invoice",         ["query_invoice_elec.sql", "query_invoice_gas.sql"]),
     ("Invoice B2B",     ["query_invoice_b2b_elec.sql", "query_invoice_b2b_gas.sql"]),
     ("Payment",         ["query_payment_elec.sql", "query_payment_gas.sql"]),
+    ("Payment B2B",     ["query_payment_b2b_elec.sql", "query_payment_b2b_gas.sql"]),
     ("Cheque Energie KJ", ["query_cheque_energie.sql"]),
     ("Cheque Energie KH", ["query_cheque_energie_kh.sql"]),
 ]
@@ -2189,8 +2196,10 @@ _ADE_HUB_META_QUERIES = {
     **_HUB_META_QUERIES,
     "query_invoice_b2b_elec.sql": "B2B_INVOICE_ELEC",
     "query_invoice_b2b_gas.sql":  "B2B_INVOICE_GAS",
-    "query_payment_elec.sql": "QUERY_PAYMENTS_ELEC_SPLUS",
-    "query_payment_gas.sql":  "QUERY_PAYMENTS_GAS_SPLUS",
+    "query_payment_elec.sql":     "QUERY_PAYMENTS_ELEC_SPLUS",
+    "query_payment_gas.sql":      "QUERY_PAYMENTS_GAS_SPLUS",
+    "query_payment_b2b_elec.sql": "B2B_PAYMENT_ELEC",
+    "query_payment_b2b_gas.sql":  "B2B_PAYMENT_GAS",
     "query_cheque_energie.sql":     "CHEQUE_ENERGIE_REGISTER",
     "query_cheque_energie_kh.sql": "CHEQUE_ENERGIE_USE",
 }
@@ -2210,8 +2219,10 @@ _ADE_TIME_KEYS = {
     "query_invoice_gas.sql":      "ADE_TIME_INVOICE_GAS",
     "query_invoice_b2b_elec.sql": "ADE_TIME_INVOICE_B2B_ELEC",
     "query_invoice_b2b_gas.sql":  "ADE_TIME_INVOICE_B2B_GAS",
-    "query_payment_elec.sql": "ADE_TIME_PAYMENT_ELEC",
-    "query_payment_gas.sql":  "ADE_TIME_PAYMENT_GAS",
+    "query_payment_elec.sql":     "ADE_TIME_PAYMENT_ELEC",
+    "query_payment_gas.sql":      "ADE_TIME_PAYMENT_GAS",
+    "query_payment_b2b_elec.sql": "ADE_TIME_PAYMENT_B2B_ELEC",
+    "query_payment_b2b_gas.sql":  "ADE_TIME_PAYMENT_B2B_GAS",
     "query_cheque_energie.sql":     "ADE_TIME_CHEQUE_ENERGIE",
     "query_cheque_energie_kh.sql": "ADE_TIME_CHEQUE_ENERGIE_KH",
 }
@@ -2345,10 +2356,12 @@ def run_ade_pipeline(flags, log, on_done, app=None):
         # Tabella delta per invoice B2B
         _INVOICE_B2B_FLOWS = {"query_invoice_b2b_elec.sql", "query_invoice_b2b_gas.sql"}
 
-        # Commodity per il delta payment
+        # Commodity per il delta payment (B2C e B2B)
         _PAYMENT_COMMODITY = {
-            "query_payment_elec.sql": "ELEC",
-            "query_payment_gas.sql":  "GAS",
+            "query_payment_elec.sql":     "ELEC",
+            "query_payment_gas.sql":      "GAS",
+            "query_payment_b2b_elec.sql": "ELEC",
+            "query_payment_b2b_gas.sql":  "GAS",
         }
 
         for flow, flag_key in _ADE_QUERY_FLAGS.items():
@@ -2416,7 +2429,7 @@ def run_ade_pipeline(flags, log, on_done, app=None):
                 try:
                     cur = hub_conn.cursor()
                     cur.execute(
-                        "SELECT MAX(updated_at)::date::text FROM j_kraken_payments "
+                        f"SELECT MAX(updated_at)::date::text FROM {table} "
                         "WHERE commodity = %s",
                         (commodity,),
                     )
@@ -2432,7 +2445,7 @@ def run_ade_pipeline(flags, log, on_done, app=None):
                     try:
                         cur = hub_conn.cursor()
                         cur.execute(
-                            "DELETE FROM j_kraken_payments "
+                            f"DELETE FROM {table} "
                             "WHERE commodity = %s AND updated_at::date >= %s",
                             (commodity, max_date),
                         )
@@ -2525,17 +2538,15 @@ def run_ade_pipeline(flags, log, on_done, app=None):
                     columns = ["supply_point" if c == "prm" else c for c in columns]
                 elif flow in ("query_invoice_gas.sql", "query_invoice_b2b_gas.sql"):
                     columns = ["supply_point" if c == "pce" else c for c in columns]
-                elif flow == "query_payment_elec.sql":
+                elif flow in ("query_payment_elec.sql", "query_payment_b2b_elec.sql"):
                     columns = ["supply_point" if c == "prm_id" else c for c in columns]
                     columns = columns + ["commodity"]
-                elif flow == "query_payment_gas.sql":
+                elif flow in ("query_payment_gas.sql", "query_payment_b2b_gas.sql"):
                     columns = ["supply_point" if c == "pce_id" else c for c in columns]
                     columns = columns + ["commodity"]
 
                 # Valore commodity da aggiungere a ogni riga
-                _commodity = ("ELEC" if flow == "query_payment_elec.sql"
-                              else "GAS" if flow == "query_payment_gas.sql"
-                              else None)
+                _commodity = _PAYMENT_COMMODITY.get(flow)
 
                 total_rows = 0
                 batch_iter = [first_batch] if first_batch else []
@@ -5739,10 +5750,49 @@ class FileValidator(_AppBase):
                 all_ok = False
                 continue
 
-            if kh_files:
-                self._enqueue_log(f"[INFO] {len(kh_files)} file KH trovati — esclusi dalla validazione.", "info")
             if kj_files:
-                self._enqueue_log(f"[INFO] {len(kj_files)} file KJ trovati — esclusi dalla validazione.", "info")
+                self._enqueue_log(f"[INFO] {len(kj_files)} file KJ trovati — avvio validazione...", "info")
+                kj_keys, kj_file_amt, kj_total, kj_errors = {}, {}, 0.0, []
+                for f in kj_files:
+                    try:
+                        k, a, t, e = _kj_aggregate_lines(f.read_text(encoding="utf-8").splitlines(), f.name)
+                        kj_keys.update(k); kj_file_amt.update(a); kj_total += t; kj_errors.extend(e)
+                    except Exception:
+                        self._enqueue_log(f"[WARN] Impossibile leggere: {f.name}", "warn")
+                for ef in kj_errors:
+                    self._enqueue_log(f"[WARN] Errore parsing: {ef}", "warn")
+                self._enqueue_log(
+                    f"[INFO] KJ  |  {len(kj_files)} file  |  Chiavi distinte: {len(kj_keys)}  |  "
+                    f"Totale amount: {kj_total:.2f}", "info")
+                self._enqueue_log(f"[INFO] Ricerca {len(kj_keys)} chiavi su HUB (j_cheque_energie_registrati)...", "info")
+                try:
+                    if not _kj_check_hub(hub_conn, kj_keys, kj_file_amt, kj_total, self._enqueue_log):
+                        all_ok = False
+                except Exception as e:
+                    self._enqueue_log(f"[ERRORE] Validazione HUB KJ: {e}", "error")
+                    all_ok = False
+
+            if kh_files:
+                self._enqueue_log(f"[INFO] {len(kh_files)} file KH trovati — avvio validazione...", "info")
+                kh_keys, kh_file_amt, kh_total, kh_errors = {}, {}, 0.0, []
+                for f in kh_files:
+                    try:
+                        k, a, t, e = _kh_aggregate_lines(f.read_text(encoding="utf-8").splitlines(), f.name)
+                        kh_keys.update(k); kh_file_amt.update(a); kh_total += t; kh_errors.extend(e)
+                    except Exception:
+                        self._enqueue_log(f"[WARN] Impossibile leggere: {f.name}", "warn")
+                for ef in kh_errors:
+                    self._enqueue_log(f"[WARN] Errore parsing: {ef}", "warn")
+                self._enqueue_log(
+                    f"[INFO] KH  |  {len(kh_files)} file  |  Chiavi distinte: {len(kh_keys)}  |  "
+                    f"Totale amount: {kh_total:.2f}", "info")
+                self._enqueue_log(f"[INFO] Ricerca {len(kh_keys)} chiavi su HUB (j_cheque_energie_utilizzati)...", "info")
+                try:
+                    if not _kh_check_hub(hub_conn, kh_keys, kh_file_amt, kh_total, self._enqueue_log):
+                        all_ok = False
+                except Exception as e:
+                    self._enqueue_log(f"[ERRORE] Validazione HUB KH: {e}", "error")
+                    all_ok = False
 
             if b2b_files and b2c_files:
                 self._enqueue_log("[ERRORE] File B2B e B2C misti non ammessi.", "error")
@@ -10818,6 +10868,131 @@ def _jira_validate_zip_structure(all_entries):
 _JIRA_INVOICE_TYPES = {"KF", "KR", "KM", "KK"}
 
 
+def _kj_aggregate_lines(lines, filename):
+    """Aggrega le righe body di un CSV KJ. Ritorna (keys, file_amt, total, parse_errors)."""
+    COL_ACCOUNT, COL_DATE, COL_CHEQUE, COL_AMT = 7, 9, 16, 8
+    keys       = {}   # key -> filename
+    file_amt   = {}   # key -> amount
+    total      = 0.0
+    parse_errors = []
+    try:
+        for line in lines[1:]:
+            line = line.strip()
+            if not line or line.endswith(";END"):
+                continue
+            cols = line.split(";")
+            account = cols[COL_ACCOUNT].strip()
+            date    = cols[COL_DATE].strip()
+            cheque  = cols[COL_CHEQUE].strip()
+            try:
+                amt = float(cols[COL_AMT].replace(",", "."))
+            except (ValueError, IndexError):
+                amt = 0.0
+            key = f"{account}_{date}_{cheque}"
+            keys[key]     = filename
+            file_amt[key] = file_amt.get(key, 0.0) + amt
+            total        += amt
+    except Exception:
+        parse_errors.append(filename)
+    return keys, file_amt, total, parse_errors
+
+
+def _kj_check_hub(hub_conn, keys, file_amt, file_total, log_fn, label=""):
+    """Verifica le chiavi KJ su j_cheque_energie_registrati. Ritorna True se ok."""
+    prefix = f"{label}  |  " if label else ""
+    all_ok = True
+    cur = hub_conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT p.key, jc.net_amount
+        FROM unnest(%s::text[]) AS p(key)
+        JOIN j_cheque_energie_registrati jc
+          ON concat(jc.account_number, '_', replace(jc.created_date, '-', ''), '_', jc.energy_cheque_id) = p.key
+    """, (list(keys.keys()),))
+    rows       = cur.fetchall()
+    cur.close()
+    found_keys   = {row[0] for row in rows}
+    hub_total    = sum(float(row[1]) for row in rows if row[1] is not None) / 100
+
+    missing = set(keys.keys()) - found_keys
+    if missing:
+        log_fn(f"[ERRORE] {prefix}Trovate su HUB: {len(found_keys)}/{len(keys)}  |  Mancanti: {len(missing)}", "error")
+        for mk in sorted(missing):
+            log_fn(f"  [MANCANTE] {mk}  ({keys[mk]})", "error")
+        all_ok = False
+    else:
+        log_fn(f"[OK] {prefix}Trovate su HUB: {len(found_keys)}/{len(keys)}", "ok")
+
+    if abs(hub_total - file_total) < 0.01:
+        log_fn(f"[OK] {prefix}Totale HUB: {hub_total:.2f}  |  Totale file: {file_total:.2f}  |  Corrispondono", "ok")
+    else:
+        log_fn(f"[WARN] {prefix}Totale HUB: {hub_total:.2f}  |  Totale file: {file_total:.2f}  |  "
+               f"Differenza: {abs(hub_total - file_total):.2f}", "warn")
+    return all_ok
+
+
+def _kh_aggregate_lines(lines, filename):
+    """Aggrega le righe body di un CSV KH. Ritorna (keys, file_amt, total, parse_errors)."""
+    COL_PRM, COL_ACCOUNT, COL_AMT, COL_DATE, COL_CREDIT = 6, 7, 8, 9, 12
+    keys       = {}
+    file_amt   = {}
+    total      = 0.0
+    parse_errors = []
+    try:
+        for line in lines[1:]:
+            line = line.strip()
+            if not line or line.endswith(";END"):
+                continue
+            cols = line.split(";")
+            prm     = cols[COL_PRM].strip()
+            account = cols[COL_ACCOUNT].strip()
+            credit  = cols[COL_CREDIT].strip()
+            date    = cols[COL_DATE].strip()
+            try:
+                amt = float(cols[COL_AMT].replace(",", "."))
+            except (ValueError, IndexError):
+                amt = 0.0
+            key = f"{prm}_{account}_{credit}_{date}"
+            keys[key]     = filename
+            file_amt[key] = file_amt.get(key, 0.0) + amt
+            total        += amt
+    except Exception:
+        parse_errors.append(filename)
+    return keys, file_amt, total, parse_errors
+
+
+def _kh_check_hub(hub_conn, keys, file_amt, file_total, log_fn, label=""):
+    """Verifica le chiavi KH su j_cheque_energie_utilizzati. Ritorna True se ok."""
+    prefix = f"{label}  |  " if label else ""
+    all_ok = True
+    cur = hub_conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT p.key, jc.net_amount
+        FROM unnest(%s::text[]) AS p(key)
+        JOIN j_cheque_energie_utilizzati jc
+          ON concat(jc.supply_point, '_', jc.account_number, '_', jc.credit_id, '_', replace(jc.transferred_at, '-', '')) = p.key
+    """, (list(keys.keys()),))
+    rows       = cur.fetchall()
+    cur.close()
+    found_keys   = {row[0] for row in rows}
+    hub_total    = sum(float(row[1]) for row in rows if row[1] is not None) / 100
+
+    missing = set(keys.keys()) - found_keys
+    if missing:
+        log_fn(f"[ERRORE] {prefix}Trovate su HUB: {len(found_keys)}/{len(keys)}  |  Mancanti: {len(missing)}", "error")
+        for mk in sorted(missing):
+            log_fn(f"  [MANCANTE] {mk}  ({keys[mk]})", "error")
+        all_ok = False
+    else:
+        log_fn(f"[OK] {prefix}Trovate su HUB: {len(found_keys)}/{len(keys)}", "ok")
+
+    if abs(hub_total - file_total) < 0.01:
+        log_fn(f"[OK] {prefix}Totale HUB: {hub_total:.2f}  |  Totale file: {file_total:.2f}  |  Corrispondono", "ok")
+    else:
+        log_fn(f"[WARN] {prefix}Totale HUB: {hub_total:.2f}  |  Totale file: {file_total:.2f}  |  "
+               f"Differenza: {abs(hub_total - file_total):.2f}", "warn")
+    return all_ok
+
+
 def _pay_aggregate_lines(lines, filename):
     """
     Aggrega le righe body di un CSV payment per (reference, payment_date, sign).
@@ -11072,7 +11247,7 @@ def _jira_validate_invoice_hub(zip_paths, log_fn):
 
 def _jira_validate_payment_hub(zip_paths, log_fn):
     """
-    Valida i file payment B2C contenuti negli ZIP contro j_kraken_payments su HUB.
+    Valida i file payment (B2C, KJ, KH) contenuti negli ZIP contro HUB.
     I file B2B vengono skippati. Ritorna True se tutto ok, False se ci sono errori.
     """
     import zipfile as _zf, os as _os
@@ -11103,43 +11278,84 @@ def _jira_validate_payment_hub(zip_paths, log_fn):
                     b2b_files = [n for n in pay_files if _PAY_B2B_RE.match(n)]
                     b2c_files = [n for n in pay_files
                                  if _PAY_B2C_RE.match(n) and not _PAY_B2B_RE.match(n)]
+                    kj_files  = [n for n in pay_files if _PAY_KJ_RE.match(n)]
+                    kh_files  = [n for n in pay_files if _PAY_KH_RE.match(n)]
 
-                    if b2b_files and not b2c_files:
-                        log_fn(f"[INFO] {zip_name} — File B2B: validazione HUB skippata.", "info")
-                        continue
+                    zip_entry_map = {_os.path.basename(e): e
+                                     for e in all_entries if not e.endswith("/")}
+
+                    # ── B2C ────────────────────────────────────────────────
                     if b2b_files and b2c_files:
                         log_fn(f"[ERRORE] {zip_name} — File B2B e B2C misti non ammessi.", "error")
                         all_ok = False
-                        continue
-                    if not b2c_files:
-                        continue
-
-                    has_payment = True
-                    zip_entry_map = {_os.path.basename(e): e
-                                     for e in all_entries if not e.endswith("/")}
-                    aggregated: dict = {}
-                    key_source: dict = {}
-
-                    for name in b2c_files:
-                        try:
-                            content = z.read(zip_entry_map.get(name, name)).decode("utf-8")
-                            agg, ks, errs = _pay_aggregate_lines(content.splitlines(), name)
-                            for k, v in agg.items():
-                                aggregated[k] = aggregated.get(k, 0.0) + v
-                            key_source.update(ks)
-                            if errs:
+                    elif b2b_files:
+                        log_fn(f"[INFO] {zip_name} — File B2B: validazione HUB skippata.", "info")
+                    elif b2c_files:
+                        has_payment = True
+                        aggregated: dict = {}
+                        key_source: dict = {}
+                        for name in b2c_files:
+                            try:
+                                content = z.read(zip_entry_map.get(name, name)).decode("utf-8")
+                                agg, ks, errs = _pay_aggregate_lines(content.splitlines(), name)
+                                for k, v in agg.items():
+                                    aggregated[k] = aggregated.get(k, 0.0) + v
+                                key_source.update(ks)
+                                if errs:
+                                    log_fn(f"[WARN] {zip_name} — Impossibile leggere: {name}", "warn")
+                            except Exception:
                                 log_fn(f"[WARN] {zip_name} — Impossibile leggere: {name}", "warn")
-                        except Exception:
-                            log_fn(f"[WARN] {zip_name} — Impossibile leggere: {name}", "warn")
+                        keys      = {f"R{r}D{d}T{s}" for (r, d, s) in aggregated}
+                        total_amt = sum(aggregated.values())
+                        log_fn(f"[INFO] {zip_name}  |  Chiavi distinte: {len(keys)}  |  "
+                               f"Totale amount: {total_amt:.2f}", "info")
+                        log_fn(f"[INFO] {zip_name} — Ricerca {len(keys)} chiavi su HUB (j_kraken_payments)...", "info")
+                        if not _pay_check_hub(hub_conn, aggregated, key_source, log_fn, zip_name):
+                            all_ok = False
 
-                    keys      = {f"R{r}D{d}T{s}" for (r, d, s) in aggregated}
-                    total_amt = sum(aggregated.values())
-                    log_fn(f"[INFO] {zip_name}  |  Chiavi distinte: {len(keys)}  |  "
-                           f"Totale amount: {total_amt:.2f}", "info")
-                    log_fn(f"[INFO] {zip_name} — Ricerca {len(keys)} chiavi su HUB (j_kraken_payments)...", "info")
+                    # ── KJ ────────────────────────────────────────────────
+                    if kj_files:
+                        has_payment = True
+                        log_fn(f"[INFO] {zip_name} — {len(kj_files)} file KJ trovati — avvio validazione...", "info")
+                        kj_keys, kj_file_amt, kj_total = {}, {}, 0.0
+                        for name in kj_files:
+                            try:
+                                content = z.read(zip_entry_map.get(name, name)).decode("utf-8")
+                                k, a, t, _ = _kj_aggregate_lines(content.splitlines(), name)
+                                kj_keys.update(k); kj_file_amt.update(a); kj_total += t
+                            except Exception:
+                                log_fn(f"[WARN] {zip_name} — Impossibile leggere: {name}", "warn")
+                        log_fn(f"[INFO] {zip_name} — KJ  |  Chiavi distinte: {len(kj_keys)}  |  "
+                               f"Totale amount: {kj_total:.2f}", "info")
+                        log_fn(f"[INFO] {zip_name} — Ricerca {len(kj_keys)} chiavi su HUB (j_cheque_energie_registrati)...", "info")
+                        try:
+                            if not _kj_check_hub(hub_conn, kj_keys, kj_file_amt, kj_total, log_fn, zip_name):
+                                all_ok = False
+                        except Exception as e:
+                            log_fn(f"[ERRORE] {zip_name} — Validazione HUB KJ: {e}", "error")
+                            all_ok = False
 
-                    if not _pay_check_hub(hub_conn, aggregated, key_source, log_fn, zip_name):
-                        all_ok = False
+                    # ── KH ────────────────────────────────────────────────
+                    if kh_files:
+                        has_payment = True
+                        log_fn(f"[INFO] {zip_name} — {len(kh_files)} file KH trovati — avvio validazione...", "info")
+                        kh_keys, kh_file_amt, kh_total = {}, {}, 0.0
+                        for name in kh_files:
+                            try:
+                                content = z.read(zip_entry_map.get(name, name)).decode("utf-8")
+                                k, a, t, _ = _kh_aggregate_lines(content.splitlines(), name)
+                                kh_keys.update(k); kh_file_amt.update(a); kh_total += t
+                            except Exception:
+                                log_fn(f"[WARN] {zip_name} — Impossibile leggere: {name}", "warn")
+                        log_fn(f"[INFO] {zip_name} — KH  |  Chiavi distinte: {len(kh_keys)}  |  "
+                               f"Totale amount: {kh_total:.2f}", "info")
+                        log_fn(f"[INFO] {zip_name} — Ricerca {len(kh_keys)} chiavi su HUB (j_cheque_energie_utilizzati)...", "info")
+                        try:
+                            if not _kh_check_hub(hub_conn, kh_keys, kh_file_amt, kh_total, log_fn, zip_name):
+                                all_ok = False
+                        except Exception as e:
+                            log_fn(f"[ERRORE] {zip_name} — Validazione HUB KH: {e}", "error")
+                            all_ok = False
 
             except Exception as e:
                 log_fn(f"[ERRORE] Impossibile leggere {zip_name}: {e}", "error")
@@ -11148,7 +11364,7 @@ def _jira_validate_payment_hub(zip_paths, log_fn):
         hub_conn.close()
 
     if not has_payment:
-        log_fn("[WARN] Nessun file payment B2C trovato — verifica HUB saltata.", "warn")
+        log_fn("[WARN] Nessun file payment trovato — verifica HUB saltata.", "warn")
 
     return all_ok
 

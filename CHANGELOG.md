@@ -1,3 +1,8 @@
+### v1.6.17 — 2026-08-11
+- **Refactoring — Payment KJ/KH**: estratte `_kj_aggregate_lines`, `_kj_check_hub`, `_kh_aggregate_lines`, `_kh_check_hub` come funzioni condivise module-level (stesso pattern di `_pay_aggregate_lines`/`_pay_check_hub`)
+- **Validator — Payment**: blocchi KJ e KH ora usano le funzioni condivise invece di logica inline
+- **Jira Ticket Creator**: aggiunta validazione KJ (`j_cheque_energie_registrati`) e KH (`j_cheque_energie_utilizzati`) in `_jira_validate_payment_hub` tramite le stesse funzioni condivise
+
 ### v1.6.16 — 2026-08-10
 - **Validator — Payment**: implementata validazione payment B2C — classifica file da nome (regex B2B/B2C/KH/KJ), aggrega per (reference, date, sign) separando PAYMENT e REJECT, cerca su `j_kraken_payments` con query `unnest` + JOIN ottimizzata con pre-filtro su `reference`/`payment_id`, confronta totali e logga chiavi mancanti con file sorgente
 - **Validator — Payment**: file KH e KJ riconosciuti ma esclusi dalla validazione HUB (logga solo il conteggio)
