@@ -1,3 +1,13 @@
+### v1.6.19 — 2026-08-12
+- **File Filter — Invoice**: aggiunta sotto-tab "Prm + Kraken Account" con treeview a due colonne (PRM | Kraken Account), identica a Payment Plans Filter e Hub Filter Updater
+- **File Filter — Invoice**: `zip_path.unlink()` all'avvio di ogni run — elimina lo ZIP esistente prima di rigenerarlo
+- **Refactoring — PRM + Kraken Account**: estratto `_AppBase._prm_account_paste_popup` come metodo condiviso con validazione `_RE_PRM_ACCOUNT` (`^[A-Za-z0-9]+;A-[A-Za-z0-9]+$`) — usato da KrakenDataExtractor, FileFilter (Payment Plans + Invoice), HubFilterUpdater
+- **Refactoring**: rimosso parametro `two_column` da `_paste_popup` — ora gestisce solo colonna singola (Identifier, Reference); il caso PRM + Kraken Account è delegato interamente a `_prm_account_paste_popup`
+- **Validazione**: regex `_RE_PRM_ACCOUNT` aggiornata — il secondo campo deve iniziare con `A-` (es. `A-4441486C`); prefissi diversi non sono accettati
+- **Refactoring — Canvas scroll**: `_AppBase._update_scroll(canvas, inner, vsb)` — auto show/hide scrollbar + scrollregion; tutti i metodi `_fc/fv/fm/zf/cbr_update_scroll` delegano a questo
+- **Refactoring — Popup Modifica/Aggiungi**: `_AppBase._paste_popup` esteso con `validate_fn`, `load_existing_fn`, `insert_fn`, `undo` — tutti i popup (FileFilter, PaymentFilter, InvoiceWriter, InvFilter) ora usano il metodo condiviso
+- **About**: contenuto spostato da codice statico a `ABOUT.md` — file esterno scaricabile ad ogni aggiornamento insieme a `CHANGELOG.md`
+
 ### v1.6.18 — 2026-08-11
 - **Kraken Full Data Extractor**: aggiunto flusso "Allocation B2B" (ELEC + GAS) — delta load su `updated_at` verso `j_kraken_allocation_b2b`, query `B2B_ALLOCATION_PWR` / `B2B_ALLOCATION_GAS` da `hub_config_query_kraken`; rename `prm_id`/`pce_id` → `supply_point`, inserimento colonna `commodity`
 - **Validator — Payment**: aggiunta regex `_PAY_BU_RE` per file Allocation B2B (prefisso `BU`) — riconosciuti e skippati; corretta regex `_PAY_B2B_RE` (prefisso `BC`, più permissiva su lunghezza segmenti)

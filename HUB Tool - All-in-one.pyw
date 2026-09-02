@@ -414,27 +414,6 @@ def _reload_env():
 
 
 
-def hub_open_ssh_tunnel(target: str = "INTEGRATION"):
-    from sshtunnel import SSHTunnelForwarder
-    prefix = "RECETTE" if target == "RECETTE" else "INTEGRATION"
-    ssh_host = os.getenv("SSH_RECETTE_HOST" if target == "RECETTE" else "SSH_HOST")
-
-    required = ["SSH_PORT", "SSH_USER", "SSH_KEY_PATH",
-                "SSH_RECETTE_HOST" if target == "RECETTE" else "SSH_HOST",
-                f"{prefix}_HOST", f"{prefix}_NAME",
-                f"{prefix}_USER", f"{prefix}_PASSWORD"]
-    missing = [v for v in required if not os.getenv(v)]
-    if missing:
-        raise EnvironmentError(f"Variabili mancanti (SSH/{target}): {', '.join(missing)}")
-    tunnel = SSHTunnelForwarder(
-        (ssh_host, int(os.getenv("SSH_PORT", "22"))),
-        ssh_username=os.getenv("SSH_USER"),
-        ssh_pkey=os.getenv("SSH_KEY_PATH"),
-        remote_bind_address=(os.getenv(f"{prefix}_HOST"),
-                             int(os.getenv(f"{prefix}_PORT", "5432"))),
-    )
-    tunnel.start()
-    return tunnel
 
 
 def get_target_connection(tunnel, target: str):
@@ -559,7 +538,7 @@ def hub_run_pipeline(target: str, app, log, on_done, sync_customer: bool = True,
         # Tunnel SSH
         log(f"\n[INFO] Apertura tunnel SSH verso {os.getenv('SSH_RECETTE_HOST' if target == 'RECETTE' else 'SSH_HOST')} ...", "info")
         try:
-            tunnel = hub_open_ssh_tunnel(target)
+            tunnel = open_ssh_tunnel(target)
             log(f"[INFO] Tunnel attivo su porta locale {tunnel.local_bind_port}", "info")
         except Exception as e:
             log(f"[ERRORE] Tunnel SSH fallito: {e}", "error")
@@ -717,6 +696,66 @@ class _AppBase(tkinter.Frame):
         self._log_box.delete("1.0", "end")
         self._log_box.configure(state="disabled")
 
+    def _update_scroll(self, canvas, inner, vsb, _e=None):
+        canvas.update_idletasks()
+        content_h = inner.winfo_reqheight()
+        canvas_h  = canvas.winfo_height()
+        if content_h > canvas_h:
+            if not vsb.winfo_ismapped():
+                vsb.pack(side="right", fill="y")
+            canvas.configure(scrollregion=(0, 0, 0, content_h))
+        else:
+            if vsb.winfo_ismapped():
+                vsb.pack_forget()
+            canvas.configure(scrollregion=(0, 0, 0, canvas_h))
+            canvas.yview_moveto(0)
+
+    def _build_drop_zone(self, parent, drop_attr, text, click_cmd, dnd_callback):
+        dz = Label(parent, text=text, bg=BG_INPUT, fg=TEXT_SEC,
+                   font=("Consolas", 9), pady=10, cursor="hand2",
+                   highlightthickness=1, highlightbackground=BORDER)
+        dz.pack(fill="x")
+        dz.bind("<Button-1>", lambda e: click_cmd())
+        dz.bind("<Enter>",    lambda e: dz.configure(highlightbackground=ACCENT))
+        dz.bind("<Leave>",    lambda e: dz.configure(highlightbackground=BORDER))
+        if _HAS_DND:
+            try:
+                dz.drop_target_register(_DND_FILES)
+                dz.dnd_bind("<<Drop>>", dnd_callback)
+            except Exception:
+                pass
+        setattr(self, drop_attr, dz)
+
+    def _clear_log_for(self, log_box_attr):
+        box = getattr(self, log_box_attr)
+        box.configure(state="normal")
+        box.delete("1.0", "end")
+        box.configure(state="disabled")
+
+    def _enqueue_log_for(self, message: str, level: str, log_queue_attr: str):
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        stripped = message.lstrip("\n")
+        prefix   = message[: len(message) - len(stripped)]
+        q = getattr(self, log_queue_attr)
+        if stripped:
+            q.put((f"{prefix}[{ts}] {stripped}", level))
+        else:
+            q.put((message, level))
+
+    def _poll_log_for(self, log_box_attr: str, log_queue_attr: str):
+        box = getattr(self, log_box_attr)
+        q   = getattr(self, log_queue_attr)
+        try:
+            while True:
+                msg, level = q.get_nowait()
+                box.configure(state="normal")
+                box.insert("end", msg + "\n", level)
+                box.see("end")
+                box.configure(state="disabled")
+        except queue.Empty:
+            pass
+
     def _make_btn(self, parent, text, command, color=ACCENT):
         btn = Label(parent, text=text, bg=BG_CARD, fg=color,
                     font=("Consolas", 10, "bold"), cursor="hand2",
@@ -772,9 +811,7 @@ class _AppBase(tkinter.Frame):
         right.pack(side="left", fill="both", expand=True)
         return left, right
 
-    def _build_log_panel(self, parent, on_clear=None):
-        """Costruisce il pannello OUTPUT LOG — identico in tutte le app.
-        Se on_clear è passato, mostra un'icona 🗑 nella testata per pulire il log."""
+    def _build_log_panel(self, parent, on_clear=None, log_attr="_log_box"):
         hdr = Frame(parent, bg=BG_CARD)
         hdr.pack(fill="x")
         Label(hdr, text="OUTPUT LOG", bg=BG_CARD, fg=TEXT_SEC,
@@ -801,21 +838,21 @@ class _AppBase(tkinter.Frame):
                 if not log_vsb.winfo_ismapped():
                     log_vsb.pack(side="right", fill="y")
             log_vsb.set(first, last)
-        self._log_box = Text(
+        log_box = Text(
             lf, bg=BG_CARD, fg=TEXT_PRI, font=("Consolas", 10),
             insertbackground=ACCENT, relief="flat", bd=0,
             yscrollcommand=_log_scroll_set, state="disabled",
             wrap="word", padx=10, pady=6, selectbackground=ACCENT2,
         )
-        self._log_box.pack(side="left", fill="both", expand=True)
-        log_vsb.config(command=self._log_box.yview)
-
-        self._log_box.tag_configure("ok",      foreground=SUCCESS)
-        self._log_box.tag_configure("error",   foreground=ERROR)
-        self._log_box.tag_configure("warn",    foreground=WARNING)
-        self._log_box.tag_configure("info",    foreground=TEXT_SEC)
-        self._log_box.tag_configure("section", foreground=ACCENT,
-                                    font=("Consolas", 10, "bold"))
+        log_box.pack(side="left", fill="both", expand=True)
+        log_vsb.config(command=log_box.yview)
+        log_box.tag_configure("ok",      foreground=SUCCESS)
+        log_box.tag_configure("error",   foreground=ERROR)
+        log_box.tag_configure("warn",    foreground=WARNING)
+        log_box.tag_configure("info",    foreground=TEXT_SEC)
+        log_box.tag_configure("section", foreground=ACCENT,
+                               font=("Consolas", 10, "bold"))
+        setattr(self, log_attr, log_box)
 
     def _enqueue_log(self, message: str, level: str = "info"):
         from datetime import datetime
@@ -844,7 +881,7 @@ class _AppBase(tkinter.Frame):
 
 
 
-    def _on_done(self, success: bool):
+    def _on_done_with_stop(self, success: bool):
         self._running = False
         self._stop_requested = False
         self._btn_stop.configure(fg=TEXT_SEC, cursor="arrow")
@@ -892,9 +929,19 @@ class _AppBase(tkinter.Frame):
         self.after(80, self._poll_log)
 
     def _paste_popup(self, *, title, subtitle, tree, count_var, empty_warning,
-                     count_label_fn, save_fn, two_column=False,
-                     W=500, H=420):
-        """Popup generico Modifica/Aggiungi — usato da PRM, Identifier e Reference."""
+                     count_label_fn, save_fn,
+                     validate_fn=None, load_existing_fn=None, insert_fn=None,
+                     undo=False):
+        """Popup generico Modifica/Aggiungi.
+
+        validate_fn(lines) -> (valid_rows, invalid_line_nos, error_msg)
+            Se None: nessuna validazione, tutte le righe non vuote sono valide.
+        load_existing_fn(tree) -> str
+            Testo iniziale del textarea. Default: join di values[0].
+        insert_fn(tree, row)
+            Come inserire ogni riga valida nel tree. Default: values=(row,).
+        """
+        W, H = 500, 420
         popup = tkinter.Toplevel(self)
         popup.title(title)
         popup.configure(bg=BG)
@@ -938,62 +985,267 @@ class _AppBase(tkinter.Frame):
         vsb.pack(side="right", fill="y")
         txt = Text(txt_frame, bg=BG_INPUT, fg=TEXT_PRI, font=("Consolas", 10),
                    relief="flat", bd=0, insertbackground=TEXT_PRI, wrap="none",
-                   padx=8, pady=6, yscrollcommand=vsb.set)
+                   padx=8, pady=6, yscrollcommand=vsb.set, undo=undo)
         txt.pack(fill="both", expand=True)
         vsb.config(command=txt.yview)
+        txt.tag_configure("invalid", foreground=WARNING, background="#2a1f00")
 
-        if two_column:
-            txt.tag_configure("invalid", foreground=WARNING, background="#2a1f00")
-
-        # Carica valori esistenti dalla tabella
-        existing = []
-        for iid in tree.get_children():
-            vals = tree.item(iid, "values")
-            if vals:
-                existing.append(f"{vals[0]};{vals[1]}" if two_column else vals[0])
-        if existing:
-            txt.insert("1.0", "\n".join(existing))
+        if load_existing_fn:
+            initial = load_existing_fn(tree)
+        else:
+            vals = [tree.item(iid, "values") for iid in tree.get_children()]
+            initial = "\n".join(v[0] for v in vals if v)
+        if initial:
+            txt.insert("1.0", initial)
         txt.focus_set()
 
         def _on_conferma():
             raw = txt.get("1.0", "end").strip().splitlines()
-            txt.tag_remove("invalid", "1.0", "end") if two_column else None
+            txt.tag_remove("invalid", "1.0", "end")
+            feedback_var.set("")
 
-            if two_column:
-                valid, invalid = [], []
-                for i, line in enumerate(raw):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    parts = line.split(";")
-                    if len(parts) == 2 and parts[0].strip() and parts[1].strip():
-                        valid.append((parts[0].strip(), parts[1].strip()))
-                    else:
-                        invalid.append(i + 1)
-                        txt.tag_add("invalid", f"{i+1}.0", f"{i+1}.end")
-                if not valid and not invalid:
-                    feedback_var.set("⚠  Nessuna riga trovata.")
+            if validate_fn:
+                valid_rows, invalid_nos, error_msg = validate_fn(raw)
+                for line_no in invalid_nos:
+                    txt.tag_add("invalid", f"{line_no}.0", f"{line_no}.end")
+                if invalid_nos:
+                    feedback_var.set(error_msg)
                     feedback_lbl.config(fg=WARNING)
                     return
-                if invalid:
-                    feedback_var.set(
-                        f"⚠  {len(invalid)} riga/e non valida/e evidenziate — correggi e riprova.")
-                    feedback_lbl.config(fg=WARNING)
-                    return
-                tree.delete(*tree.get_children())
-                for p0, p1 in valid:
-                    tree.insert("", "end", values=(p0, p1))
-            else:
-                valid = [line.strip() for line in raw if line.strip()]
-                if not valid:
+                if not valid_rows:
                     feedback_var.set(empty_warning)
                     feedback_lbl.config(fg=WARNING)
                     return
-                tree.delete(*tree.get_children())
-                for v in valid:
-                    tree.insert("", "end", values=(v,))
+            else:
+                valid_rows = [line.strip() for line in raw if line.strip()]
+                if not valid_rows:
+                    feedback_var.set(empty_warning)
+                    feedback_lbl.config(fg=WARNING)
+                    return
 
-            count_var.set(count_label_fn(len(valid)))
+            tree.delete(*tree.get_children())
+            _insert = insert_fn or (lambda t, r: t.insert("", "end", values=(r,)))
+            for row in valid_rows:
+                _insert(tree, row)
+            count_var.set(count_label_fn(len(valid_rows)))
+            save_fn()
+            popup.destroy()
+
+        btn_conferma.config(command=_on_conferma)
+
+    def _update_btn_state(self, data):
+        has = bool(data)
+        self._btn.configure(fg=ACCENT if has else TEXT_SEC,
+                            cursor="hand2" if has else "arrow")
+
+    def _on_done(self, success: bool):
+        self._running = False
+        self._status_var.set("✓ Completato." if success else "✗ Terminato con errori o avvisi.")
+        self._btn.configure(fg=SUCCESS if success else ERROR, cursor="hand2")
+        self.after(3000, lambda: self._update_btn_state(self._btn_data))
+        self._on_done_extra(success)
+
+    def _on_done_extra(self, success: bool):
+        pass
+
+    def _get_int_conn(self):
+        env    = _get_target_env()
+        tunnel = open_ssh_tunnel(env)
+        conn   = get_integration_connection(tunnel, env)
+        return tunnel, conn
+
+    def _build_status_bar(self):
+        self._status_var = tkinter.StringVar(value="Pronto.")
+        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
+        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
+                                  font=("Consolas", 9), anchor="w", pady=5)
+        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+
+    def _make_icon_btn(self, parent, symbol, command, color=None, tip=""):
+        if color is None:
+            color = ACCENT
+        lbl = Label(parent, text=symbol, bg=BG_CARD, fg=color,
+                    font=("Consolas", 14), cursor="hand2", padx=10, pady=6)
+        lbl.bind("<Button-1>", lambda e: command())
+        lbl.bind("<Enter>",    lambda e: (lbl.configure(bg=BG_HOVER),
+                                          self._status_var.set(tip) if tip else None))
+        lbl.bind("<Leave>",    lambda e: (lbl.configure(bg=BG_CARD),
+                                          self._status_var.set("Pronto.")))
+        return lbl
+
+    def _load_list_from_file(self, file, data_attr, redraw_fn):
+        raw = file.read_text(encoding="utf-8") if file.exists() else ""
+        setattr(self, data_attr, [l.strip() for l in raw.splitlines() if l.strip()])
+        redraw_fn()
+
+    def _load_prm_input_from_file(self, file):
+        for row in self._input_tree.get_children():
+            self._input_tree.delete(row)
+        if not file.exists():
+            self._input_count_var.set("File non trovato — verrà creato al salvataggio.")
+            return
+        lines = file.read_text(encoding="utf-8").strip().splitlines()
+        count = 0
+        for line in lines:
+            line = line.strip()
+            if not line or line.lower().startswith("prm"):
+                continue
+            parts = line.split(";")
+            if len(parts) == 2:
+                self._input_tree.insert("", "end", values=(parts[0].strip(), parts[1].strip()))
+                count += 1
+            else:
+                self._input_tree.insert("", "end", values=(line, ""))
+        self._input_count_var.set(f"{count} righe caricate.")
+
+    def _save_and_reload(self, file, content, redraw_fn):
+        try:
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(content, encoding="utf-8")
+            self._status_var.set(f"✓ {file.name} salvato.")
+        except Exception as e:
+            messagebox.showerror("Errore salvataggio", str(e))
+        redraw_fn()
+
+    def _render_rows(self, inner, data, remove_cmd, scroll_fn):
+        for w in inner.winfo_children():
+            w.destroy()
+        for path in data:
+            row = Frame(inner, bg=BG_CARD)
+            row.pack(fill="x", padx=6, pady=1)
+            x_lbl = Label(row, text="✕", bg=BG_CARD, fg=ERROR,
+                          font=("Consolas", 10, "bold"), cursor="hand2",
+                          padx=8, pady=4)
+            x_lbl.pack(side="left")
+            x_lbl.bind("<Button-1>", lambda e, p=path: remove_cmd(p))
+            x_lbl.bind("<Enter>",    lambda e, l=x_lbl: l.configure(bg=BG_HOVER))
+            x_lbl.bind("<Leave>",    lambda e, l=x_lbl: l.configure(bg=BG_CARD))
+            Label(row, text=path, bg=BG_CARD, fg=TEXT_PRI,
+                  font=("Consolas", 10), anchor="w", pady=4).pack(
+                  side="left", fill="x", expand=True)
+            Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=6)
+        self._update_btn_state(data)
+        scroll_fn()
+
+    def _load_filter_from_file(self, tree, filter_file, count_var=None):
+        for row in tree.get_children():
+            tree.delete(row)
+        if not filter_file.exists():
+            if count_var:
+                count_var.set("File non trovato.")
+            return
+        two_col = len(tree["columns"]) >= 2
+        lines = filter_file.read_text(encoding="utf-8").strip().splitlines()
+        keys  = [l.strip() for l in lines if l.strip()]
+        for k in keys:
+            if two_col:
+                parts = k.split(";", 1)
+                tree.insert("", "end", values=(parts[0], parts[1]) if len(parts) == 2 else (k, ""))
+            else:
+                tree.insert("", "end", values=(k,))
+        if count_var:
+            count_var.set(f"{len(keys)} chiavi caricate.")
+
+    def _save_filter_to_file(self, tree, filter_file):
+        two_col = len(tree["columns"]) >= 2
+        rows = []
+        for iid in tree.get_children():
+            vals = tree.item(iid, "values")
+            if not vals:
+                continue
+            rows.append(f"{vals[0]};{vals[1]}" if two_col and len(vals) >= 2 else vals[0])
+        try:
+            filter_file.parent.mkdir(parents=True, exist_ok=True)
+            filter_file.write_text(("\n".join(rows) + "\n") if rows else "", encoding="utf-8")
+            self._status_var.set(f"✓ {filter_file.name} salvato ({len(rows)} chiavi).")
+        except Exception as e:
+            messagebox.showerror("Errore salvataggio filtro", str(e))
+
+    def _prm_account_paste_popup(self, *, tree, count_var, save_fn):
+        """Popup condiviso per PRM;Kraken Account con validazione _RE_PRM_ACCOUNT."""
+        W, H = 500, 420
+        popup = tkinter.Toplevel(self)
+        popup.title("Modifica / Aggiungi — Prm + Kraken Account")
+        popup.configure(bg=BG)
+        popup.resizable(False, False)
+        popup.grab_set()
+        popup.update_idletasks()
+        x = (popup.winfo_screenwidth()  - W) // 2
+        y = (popup.winfo_screenheight() - H) // 2
+        popup.geometry(f"{W}x{H}+{x}+{y}")
+
+        Label(popup, text="Modifica / Aggiungi — Prm + Kraken Account",
+              bg=BG, fg=TEXT_PRI, font=("Consolas", 11, "bold"), pady=12).pack()
+        Label(popup, text="Una coppia per riga. Formato: {prm};{kraken_account}",
+              bg=BG, fg=TEXT_SEC, font=("Consolas", 9), justify="center").pack()
+        Frame(popup, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(8, 0))
+
+        btn_row = Frame(popup, bg=BG)
+        btn_row.pack(side="bottom", fill="x", padx=16, pady=12)
+        tkinter.Button(btn_row, text="Annulla", bg=BG_CARD, fg=TEXT_SEC,
+                       activebackground=BG_HOVER, activeforeground=TEXT_PRI,
+                       font=("Consolas", 10, "bold"), relief="flat",
+                       cursor="hand2", pady=6, padx=14, bd=0,
+                       command=popup.destroy).pack(side="right", padx=(6, 0))
+        btn_conferma = tkinter.Button(btn_row, text="✓  Conferma",
+                                      bg=ACCENT, fg="#ffffff",
+                                      activebackground="#3a7ee8",
+                                      activeforeground="#ffffff",
+                                      font=("Consolas", 10, "bold"),
+                                      relief="flat", cursor="hand2",
+                                      pady=6, padx=14, bd=0)
+        btn_conferma.pack(side="right")
+
+        feedback_var = tkinter.StringVar(value="")
+        Label(popup, textvariable=feedback_var, bg=BG, fg=WARNING,
+              font=("Consolas", 9), pady=4, justify="left",
+              anchor="w").pack(side="bottom", fill="x", padx=16)
+
+        txt_frame = Frame(popup, bg=BG_CARD)
+        txt_frame.pack(fill="both", expand=True, padx=16, pady=(8, 0))
+        vsb = ttk.Scrollbar(txt_frame, style="Dark.Vertical.TScrollbar")
+        vsb.pack(side="right", fill="y")
+        txt = tkinter.Text(txt_frame, bg=BG_INPUT, fg=TEXT_PRI,
+                           font=("Consolas", 10), relief="flat", bd=0,
+                           insertbackground=TEXT_PRI, wrap="none",
+                           padx=8, pady=6, yscrollcommand=vsb.set)
+        txt.pack(fill="both", expand=True)
+        vsb.config(command=txt.yview)
+        txt.focus_set()
+        txt.tag_configure("invalid", foreground=WARNING, background="#2a1f00")
+
+        existing = []
+        for iid in tree.get_children():
+            vals = tree.item(iid, "values")
+            if vals:
+                existing.append(f"{vals[0]};{vals[1]}")
+        if existing:
+            txt.insert("1.0", "\n".join(existing))
+
+        _fmt_hint = "Formato atteso: {prm};{kraken_account}  (es. 23303473182198;A-4441486C)"
+
+        def _on_conferma():
+            raw = txt.get("1.0", "end").strip().splitlines()
+            txt.tag_remove("invalid", "1.0", "end")
+            feedback_var.set("")
+            stripped = [(i, line.strip()) for i, line in enumerate(raw) if line.strip()]
+            if not stripped:
+                feedback_var.set("⚠  Nessuna chiave trovata.")
+                return
+            invalid_lines = [(i, k) for i, k in stripped if not _RE_PRM_ACCOUNT.match(k)]
+            for i, _ in invalid_lines:
+                txt.tag_add("invalid", f"{i+1}.0", f"{i+1}.end")
+            if invalid_lines:
+                _n = len(invalid_lines)
+                _lbl = "chiave non valida" if _n == 1 else "chiavi non valide"
+                feedback_var.set(f"⚠  {_n} {_lbl}.\n{_fmt_hint}")
+                return
+            keys = [k for _, k in stripped]
+            tree.delete(*tree.get_children())
+            for k in keys:
+                parts = k.split(";", 1)
+                tree.insert("", "end", values=(parts[0], parts[1]))
+            count_var.set(f"{len(keys)} righe.")
             save_fn()
             popup.destroy()
 
@@ -1022,11 +1274,7 @@ class HubProdSync(_AppBase):
 
 
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-                                  font=("Consolas", 9), anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
         self._build_notebook([
             ("  ▶  Pipeline  ", self._build_pipeline_tab),
         ])
@@ -1137,7 +1385,7 @@ class HubProdSync(_AppBase):
         self._status_var.set(f"In esecuzione → {target} ...")
         threading.Thread(
             target=hub_run_pipeline,
-            args=(target, self, self._enqueue_log, self._on_done,
+            args=(target, self, self._enqueue_log, self._on_done_with_stop,
                   self._sync_customer_var.get(), self._sync_agreement_var.get(),
                   self._sync_sap_filter_var.get(), self._sync_identifier_version_var.get(),
                   self._sync_sap_old_plan_var.get(),
@@ -1261,7 +1509,7 @@ QUERY_FLAGS_REFERENCE = {
 
 FLAG_ENV_KEYS = QUERY_FLAGS  # alias usato da KrakenDataExtractor._load_flags_from_env
 
-def _reload_env_into_os():
+def _reload_env():
     load_dotenv(dotenv_path=_ENV, override=True)
 
 # Flow identifier che estraggono PRM/Kraken dai risultati invoice
@@ -1312,21 +1560,6 @@ QUERY_LABELS = {
     "query_cheque_kh.sql":    "Cheque Energie KH",
 }
 
-# ── Colori & stile ───────────────────────────────────────────────────────────
-BG       = "#0f1117"
-BG_CARD  = "#1a1d27"
-BG_CARD2 = "#141720"
-BG_HOVER = "#22263a"
-BG_INPUT = "#0d1020"
-ACCENT   = "#4f8ef7"
-ACCENT2  = "#7c3aed"
-SUCCESS  = "#22c55e"
-WARNING  = "#f59e0b"
-ERROR    = "#ef4444"
-TEXT_PRI = "#f0f2ff"
-TEXT_SEC = "#8892b0"
-BORDER   = "#2a2d3e"
-
 
 # ════════════════════════════════════════════════════════════════════════════
 # LOGICA PIPELINE
@@ -1356,21 +1589,6 @@ def get_integration_connection(tunnel, env="INTEGRATION"):
         dbname=os.getenv(f"{prefix}_NAME"),
         user=os.getenv(f"{prefix}_USER"),
         password=os.getenv(f"{prefix}_PASSWORD"),
-    )
-
-
-def get_hub_connection():
-    import psycopg2
-    required = ["HUB_HOST", "HUB_PORT", "HUB_NAME", "HUB_USER", "HUB_PASSWORD"]
-    missing = [v for v in required if not os.getenv(v)]
-    if missing:
-        raise EnvironmentError(f"Variabili d'ambiente mancanti (db3): {', '.join(missing)}")
-    return psycopg2.connect(
-        host=os.getenv("HUB_HOST"),
-        port=int(os.getenv("HUB_PORT", "5432")),
-        dbname=os.getenv("HUB_NAME"),
-        user=os.getenv("HUB_USER"),
-        password=os.getenv("HUB_PASSWORD"),
     )
 
 
@@ -1756,7 +1974,7 @@ def _run_identifier_query_gui(hub_conn, kraken_conn, integration_conn, flow, fla
 
 def run_pipeline_identifier(flags, log, on_done, env="INTEGRATION"):
     import psycopg2
-    _reload_env_into_os()
+    _reload_env()
 
     try:
 
@@ -1900,7 +2118,7 @@ def _run_reference_payment_gui(hub_conn, kraken_conn, integration_conn, flow,
 
 def run_pipeline_reference(flags, log, on_done, env="INTEGRATION"):
     import psycopg2
-    _reload_env_into_os()
+    _reload_env()
 
     try:
 
@@ -2049,7 +2267,7 @@ def _run_payment_query_gui(hub_conn, kraken_conn, integration_conn, flow, flags,
 
 def run_pipeline(flags, log, on_done, env="INTEGRATION"):
     import psycopg2
-    _reload_env_into_os()
+    _reload_env()
 
     try:
         # Pulizia output
@@ -2320,7 +2538,7 @@ def run_ade_pipeline(flags, log, on_done, app=None):
     - I tempi di esecuzione per flow vengono salvati nel .env come previsione
     """
     import psycopg2, time
-    _reload_env_into_os()
+    _reload_env()
 
     def _stopped():
         return app is not None and getattr(app, "_stop_requested", False)
@@ -2652,7 +2870,7 @@ def run_ade_pipeline(flags, log, on_done, app=None):
                          if flow in _ADE_TIME_KEYS}
             try:
                 _write_env(time_data)
-                _reload_env_into_os()
+                _reload_env()
             except Exception:
                 pass
 
@@ -2680,11 +2898,7 @@ class KrakenFullDataExtractor(_AppBase):
         self._poll_log()
 
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-                                  font=("Consolas", 9), anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
 
         body = Frame(self, bg=BG)
         body.pack(fill="both", expand=True, padx=24, pady=(12, 0))
@@ -2797,7 +3011,7 @@ class KrakenFullDataExtractor(_AppBase):
                 for flow, var in self._flags.items()}
         try:
             _write_env(data)
-            _reload_env_into_os()
+            _reload_env()
         except Exception as e:
             messagebox.showerror("Errore salvataggio flags", str(e))
 
@@ -2833,7 +3047,7 @@ class KrakenFullDataExtractor(_AppBase):
         flags = {flow: var.get() for flow, var in self._flags.items()}
         threading.Thread(
             target=run_ade_pipeline,
-            args=(flags, self._enqueue_log, self._on_done, self),
+            args=(flags, self._enqueue_log, self._on_done_with_stop, self),
             daemon=True,
         ).start()
 
@@ -2883,10 +3097,7 @@ class HubConsole(_AppBase):
         self._schedule_flag_refresh()
 
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-              font=("Consolas", 9), anchor="w", pady=5).pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
 
         body = Frame(self, bg=BG)
         body.pack(fill="both", expand=True, padx=24, pady=(12, 0))
@@ -3026,13 +3237,6 @@ class HubConsole(_AppBase):
             self._env_poll_job = self.after(2_000, _poll_env)
         self._refresh_job   = self.after(30_000, _refresh)
         self._env_poll_job  = self.after(2_000, _poll_env)
-
-    def _get_int_conn(self):
-        """Apre tunnel SSH e restituisce (tunnel, conn) per l'ambiente corrente."""
-        env = _get_target_env()
-        tunnel = open_ssh_tunnel(env)
-        conn   = get_integration_connection(tunnel, env)
-        return tunnel, conn
 
     def _load_flags_from_hub(self):
         """Legge i flag dalla hub_config_db e aggiorna le checkbox."""
@@ -3224,12 +3428,7 @@ class KrakenDataExtractor(_AppBase):
         nb.add(tab_input, text="  📋  Data Input  ")
         self._build_input_tab(tab_input)
 
-
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-                                  font=("Consolas", 9), anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=24, side="bottom")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
 
     # ── Tab Pipeline ─────────────────────────────────────────────────────
 
@@ -3554,20 +3753,7 @@ class KrakenDataExtractor(_AppBase):
     def _load_reference_into_table(self):
         if not hasattr(self, "_ref_tree"):
             return
-        for row in self._ref_tree.get_children():
-            self._ref_tree.delete(row)
-        if not INPUT_FILE_REFERENCE.exists():
-            self._ref_count_var.set("File non trovato — verrà creato al salvataggio.")
-            return
-        lines = INPUT_FILE_REFERENCE.read_text(encoding="utf-8").strip().splitlines()
-        count = 0
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            self._ref_tree.insert("", "end", values=(line,))
-            count += 1
-        self._ref_count_var.set(f"{count} reference caricate.")
+        self._load_filter_from_file(self._ref_tree, INPUT_FILE_REFERENCE, self._ref_count_var)
 
     def _reference_paste_popup(self):
         self._paste_popup(
@@ -3590,17 +3776,10 @@ class KrakenDataExtractor(_AppBase):
         )
 
     def _input_paste_popup(self):
-        self._paste_popup(
-            title="Modifica / Aggiungi dati",
-            subtitle=("Modifica, aggiungi o cancella righe. Formato: PRM;KrakenAccount\n"
-                      "Le righe non valide verranno evidenziate in arancione."),
+        self._prm_account_paste_popup(
             tree=self._input_tree, count_var=self._input_count_var,
-            empty_warning="⚠  Nessuna riga trovata.",
-            count_label_fn=lambda n: f"{n} righe.",
             save_fn=self._save_input,
-            two_column=True, W=560, H=460,
         )
-
 
     def _reference_clear_all(self):
         if not self._ref_tree.get_children():
@@ -3610,39 +3789,24 @@ class KrakenDataExtractor(_AppBase):
             self._ref_count_var.set("0 reference.")
             self._save_reference_input()
 
-    def _save_reference_input(self):
-        rows = [self._ref_tree.item(iid, "values")[0]
-                for iid in self._ref_tree.get_children()
-                if self._ref_tree.item(iid, "values")]
+    def _save_tree_to_file(self, tree, file, label):
+        rows = [tree.item(iid, "values")[0]
+                for iid in tree.get_children()
+                if tree.item(iid, "values")]
         try:
-            INPUT_FILE_REFERENCE.parent.mkdir(parents=True, exist_ok=True)
-            INPUT_FILE_REFERENCE.write_text("\n".join(rows) + "\n" if rows else "", encoding="utf-8")
-            self._status_var.set(f"✓ data_input_reference.txt salvato ({len(rows)} righe).")
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text("\n".join(rows) + "\n" if rows else "", encoding="utf-8")
+            self._status_var.set(f"✓ {label} salvato ({len(rows)} righe).")
         except Exception as e:
             messagebox.showerror("Errore salvataggio", str(e))
 
+    def _save_reference_input(self):
+        self._save_tree_to_file(self._ref_tree, INPUT_FILE_REFERENCE, "data_input_reference.txt")
+
     def _load_input_into_table(self):
-        """Legge data_input.txt e popola la tabella PRM."""
         if not hasattr(self, "_input_tree"):
             return
-        for row in self._input_tree.get_children():
-            self._input_tree.delete(row)
-        if not INPUT_FILE.exists():
-            self._input_count_var.set("File non trovato — verrà creato al salvataggio.")
-            return
-        lines = INPUT_FILE.read_text(encoding="utf-8").strip().splitlines()
-        count = 0
-        for line in lines:
-            line = line.strip()
-            if not line or line.lower().startswith("prm"):
-                continue
-            parts = line.split(";")
-            if len(parts) == 2:
-                self._input_tree.insert("", "end", values=(parts[0].strip(), parts[1].strip()))
-                count += 1
-            else:
-                self._input_tree.insert("", "end", values=(line, ""))
-        self._input_count_var.set(f"{count} righe caricate.")
+        self._load_prm_input_from_file(INPUT_FILE)
 
 
     def _identifier_clear_all(self):
@@ -3654,33 +3818,12 @@ class KrakenDataExtractor(_AppBase):
             self._save_identifier_input()
 
     def _save_identifier_input(self):
-        rows = [self._id_tree.item(iid, "values")[0]
-                for iid in self._id_tree.get_children()
-                if self._id_tree.item(iid, "values")]
-        try:
-            INPUT_FILE_IDENTIFIER.parent.mkdir(parents=True, exist_ok=True)
-            INPUT_FILE_IDENTIFIER.write_text("\n".join(rows) + "\n" if rows else "", encoding="utf-8")
-            self._status_var.set(f"✓ data_input_identifier.txt salvato ({len(rows)} righe).")
-        except Exception as e:
-            messagebox.showerror("Errore salvataggio", str(e))
+        self._save_tree_to_file(self._id_tree, INPUT_FILE_IDENTIFIER, "data_input_identifier.txt")
 
     def _load_identifier_into_table(self):
         if not hasattr(self, "_id_tree"):
             return
-        for row in self._id_tree.get_children():
-            self._id_tree.delete(row)
-        if not INPUT_FILE_IDENTIFIER.exists():
-            self._id_count_var.set("File non trovato — verrà creato al salvataggio.")
-            return
-        lines = INPUT_FILE_IDENTIFIER.read_text(encoding="utf-8").strip().splitlines()
-        count = 0
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            self._id_tree.insert("", "end", values=(line,))
-            count += 1
-        self._id_count_var.set(f"{count} identifier caricati.")
+        self._load_filter_from_file(self._id_tree, INPUT_FILE_IDENTIFIER, self._id_count_var)
 
     def _input_clear_all(self):
         if not self._input_tree.get_children():
@@ -3807,7 +3950,7 @@ class KrakenDataExtractor(_AppBase):
         if missing_id:
             try:
                 _write_env(missing_id)
-                _reload_env_into_os()
+                _reload_env()
             except Exception:
                 pass
 
@@ -3827,7 +3970,7 @@ class KrakenDataExtractor(_AppBase):
         if missing_ref:
             try:
                 _write_env(missing_ref)
-                _reload_env_into_os()
+                _reload_env()
             except Exception:
                 pass
 
@@ -3840,7 +3983,7 @@ class KrakenDataExtractor(_AppBase):
                      for qf, var in self._flags_reference.items()})
         try:
             _write_env(data)
-            _reload_env_into_os()
+            _reload_env()
             self._status_var.set("✓ Flag salvati nel .env.")
         except Exception as e:
             messagebox.showerror("Errore salvataggio flags", str(e))
@@ -4286,15 +4429,12 @@ class BonificaProd(_AppBase):
                 if k in _BP_ENV_KEYS}
         try:
             _write_env(data)
-            _reload_env_into_os()
+            _reload_env()
         except Exception:
             pass
 
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-              font=("Consolas", 9), anchor="w", pady=5).pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
 
         body = Frame(self, bg=BG)
         body.pack(fill="both", expand=True, padx=24, pady=(12, 0))
@@ -4351,12 +4491,6 @@ class BonificaProd(_AppBase):
                       highlightbackground=BORDER)
         right.pack(side="left", fill="both", expand=True, padx=(10, 0))
         self._build_log_panel(right, on_clear=self._clear_log)
-
-    def _get_int_conn(self):
-        env    = _get_target_env()
-        tunnel = open_ssh_tunnel(env)
-        conn   = get_integration_connection(tunnel, env)
-        return tunnel, conn
 
     def _start(self):
         if self._running:
@@ -4812,11 +4946,7 @@ class DeltaRecovery(_AppBase):
 
 
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-                                  font=("Consolas", 9), anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
         self._build_notebook([
             ("  ▶  Pipeline  ", self._build_pipeline_tab),
             ("  ✎  Query  ",   self._build_query_tab),
@@ -5172,12 +5302,11 @@ class FolderCleaner(_AppBase):
         self._load_folders()
         self._poll_log()
 
+    @property
+    def _btn_data(self): return self._folders
+
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-                                  font=("Consolas", 9), anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
 
         body = Frame(self, bg=BG, highlightthickness=1, highlightbackground=BORDER)
         body.pack(fill="both", expand=True, padx=24, pady=(12, 0))
@@ -5195,44 +5324,18 @@ class FolderCleaner(_AppBase):
         Label(hdr, text="CARTELLE", bg=BG_CARD, fg=TEXT_SEC,
               font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
 
-        def _icon_btn(parent, symbol, command, color=ACCENT, tip=""):
-            lbl = Label(parent, text=symbol, bg=BG_CARD, fg=color,
-                        font=("Consolas", 14), cursor="hand2", padx=10, pady=6)
-            lbl.bind("<Button-1>", lambda e: command())
-            lbl.bind("<Enter>",    lambda e: (lbl.configure(bg=BG_HOVER),
-                                              self._status_var.set(tip) if tip else None))
-            lbl.bind("<Leave>",    lambda e: (lbl.configure(bg=BG_CARD),
-                                              self._status_var.set("Pronto.")))
-            return lbl
-
         # Ordine invertito: 🗑 → + → ▶  (pack side=right → appare sinistra→destra)
-        _icon_btn(hdr, "🗑", self._remove_all, ERROR,  "Rimuovi tutto").pack(side="right", padx=(0, 4))
-        self._btn = _icon_btn(hdr, "▶", self._start, ACCENT, "Avvia pulizia")
+        self._make_icon_btn(hdr, "🗑", self._remove_all, ERROR,  "Rimuovi tutto").pack(side="right", padx=(0, 4))
+        self._btn = self._make_icon_btn(hdr, "▶", self._start, ACCENT, "Avvia pulizia")
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
 
         # ── Drop zone drag & drop cartelle ───────────────────────────────────
         dz_body = Frame(top, bg=BG_CARD)
         dz_body.pack(fill="x", padx=8, pady=(6, 2))
-        self._fc_drop_zone = Label(
-            dz_body,
-            text="\U0001f4c2  Trascina qui una o più cartelle",
-            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
-            pady=10, cursor="hand2",
-            highlightthickness=1, highlightbackground=BORDER,
-        )
-        self._fc_drop_zone.pack(fill="x")
-        self._fc_drop_zone.bind("<Button-1>", lambda e: self._browse_folder())
-        self._fc_drop_zone.bind("<Enter>",
-            lambda e: self._fc_drop_zone.configure(highlightbackground=ACCENT))
-        self._fc_drop_zone.bind("<Leave>",
-            lambda e: self._fc_drop_zone.configure(highlightbackground=BORDER))
-        if _HAS_DND:
-            try:
-                self._fc_drop_zone.drop_target_register(_DND_FILES)
-                self._fc_drop_zone.dnd_bind("<<Drop>>", self._on_fc_dnd_drop)
-            except Exception:
-                pass
+        self._build_drop_zone(dz_body, "_fc_drop_zone",
+                              "\U0001f4c2  Trascina qui una o più cartelle",
+                              self._browse_folder, self._on_fc_dnd_drop)
 
         # Canvas scrollabile per le righe cartelle
         canvas_frame = Frame(top, bg=BG_CARD)
@@ -5259,9 +5362,7 @@ class FolderCleaner(_AppBase):
         self._fc_canvas.bind("<Leave>", lambda e: self._fc_canvas.unbind_all(
             "<MouseWheel>"))
 
-        Label(top, text="# Le righe che iniziano con # sono commenti",
-              bg=BG_CARD, fg=TEXT_SEC, font=("Consolas", 8),
-              anchor="w", padx=14, pady=4).pack(fill="x")
+
         paned.add(top, minsize=80, height=180, stretch="never")
 
         # ── Pannello inferiore: log ───────────────────────────────────────
@@ -5292,32 +5393,10 @@ class FolderCleaner(_AppBase):
             pass
         self.after(80, self._poll_log)
 
-    def _on_done(self, success: bool):
-        self._running = False
-        if success:
-            self._status_var.set("✓ Pulizia completata.")
-            self._btn.configure(fg=SUCCESS, cursor="hand2")
-        else:
-            self._status_var.set("✗ Terminato con errori o avvisi.")
-            self._btn.configure(fg=ERROR, cursor="hand2")
-        self.after(3000, self._update_btn_state)
-
     # ── Lista cartelle ──────────────────────────────────────────────────────
 
     def _fc_update_scroll(self, _e=None):
-        """Aggiorna la scrollregion e mostra/nasconde la scrollbar."""
-        self._fc_canvas.update_idletasks()
-        content_h = self._fc_inner.winfo_reqheight()
-        canvas_h  = self._fc_canvas.winfo_height()
-        if content_h > canvas_h:
-            if not self._fc_vsb.winfo_ismapped():
-                self._fc_vsb.pack(side="right", fill="y")
-            self._fc_canvas.configure(scrollregion=(0, 0, 0, content_h))
-        else:
-            if self._fc_vsb.winfo_ismapped():
-                self._fc_vsb.pack_forget()
-            self._fc_canvas.configure(scrollregion=(0, 0, 0, canvas_h))
-            self._fc_canvas.yview_moveto(0)
+        self._update_scroll(self._fc_canvas, self._fc_inner, self._fc_vsb)
 
     def _load_folders(self):
         """Carica da file e ri-renderizza la lista."""
@@ -5325,27 +5404,10 @@ class FolderCleaner(_AppBase):
         self._folders = [l.strip() for l in raw.splitlines()
                          if l.strip() and not l.strip().startswith("#")]
         self._render_rows()
-        self._update_btn_state()
+        self._update_btn_state(self._folders)
 
     def _render_rows(self):
-        """Ri-disegna tutte le righe nel canvas."""
-        for w in self._fc_inner.winfo_children():
-            w.destroy()
-        for path in self._folders:
-            row = Frame(self._fc_inner, bg=BG_CARD)
-            row.pack(fill="x", padx=6, pady=1)
-            x_lbl = Label(row, text="✕", bg=BG_CARD, fg=ERROR,
-                          font=("Consolas", 10, "bold"), cursor="hand2",
-                          padx=8, pady=4)
-            x_lbl.pack(side="left")
-            x_lbl.bind("<Button-1>", lambda e, p=path: self._remove_line(p))
-            x_lbl.bind("<Enter>",    lambda e, l=x_lbl: l.configure(bg=BG_HOVER))
-            x_lbl.bind("<Leave>",    lambda e, l=x_lbl: l.configure(bg=BG_CARD))
-            Label(row, text=path, bg=BG_CARD, fg=TEXT_PRI,
-                  font=("Consolas", 10), anchor="w", pady=4).pack(
-                  side="left", fill="x", expand=True)
-            Frame(self._fc_inner, bg=BORDER, height=1).pack(fill="x", padx=6)
-        self._fc_update_scroll()
+        super()._render_rows(self._fc_inner, self._folders, self._remove_line, self._fc_update_scroll)
 
     def _save_folders(self):
         """Salva la lista corrente su file."""
@@ -5357,17 +5419,12 @@ class FolderCleaner(_AppBase):
         except Exception as e:
             messagebox.showerror("Errore salvataggio", str(e))
 
-    def _update_btn_state(self):
-        has = bool(self._folders)
-        self._btn.configure(fg=ACCENT if has else TEXT_SEC,
-                            cursor="hand2" if has else "arrow")
-
     def _remove_line(self, path: str):
         if path in self._folders:
             self._folders.remove(path)
             self._render_rows()
             self._save_folders()
-            self._update_btn_state()
+            self._update_btn_state(self._folders)
 
     def _remove_all(self):
         if not self._folders:
@@ -5378,7 +5435,7 @@ class FolderCleaner(_AppBase):
         self._folders.clear()
         self._render_rows()
         self._save_folders()
-        self._update_btn_state()
+        self._update_btn_state(self._folders)
 
     def _browse_folder(self):
         path = filedialog.askdirectory(title="Seleziona cartella da aggiungere")
@@ -5389,7 +5446,7 @@ class FolderCleaner(_AppBase):
         self._folders.append(path)
         self._render_rows()
         self._save_folders()
-        self._update_btn_state()
+        self._update_btn_state(self._folders)
 
     def _on_fc_dnd_drop(self, event):
         import re
@@ -5404,7 +5461,7 @@ class FolderCleaner(_AppBase):
         if added:
             self._render_rows()
             self._save_folders()
-            self._update_btn_state()
+            self._update_btn_state(self._folders)
 
     def _start(self):
         if self._running or not self._folders:
@@ -5425,6 +5482,8 @@ class FolderCleaner(_AppBase):
 _FV_TXT = _HERE / "input" / "validator" / "folders.txt"
 
 import re as _fv_re
+_RE_IDENTIFIER   = _fv_re.compile(r'^[EG]B[A-Za-z0-9]+$')
+_RE_PRM_ACCOUNT  = _fv_re.compile(r'^[A-Za-z0-9]+;A-[A-Za-z0-9]+$')
 _PAY_B2B_RE  = _fv_re.compile(r'^(KE|KG)_[A-Z0-9]+_BC\d+_\d{8}\.csv$',      _fv_re.IGNORECASE)
 _PAY_BU_RE   = _fv_re.compile(r'^(KE|KG)_[A-Z0-9]+_BU_\d+_\d{8}\.csv$',      _fv_re.IGNORECASE)
 _PAY_B2C_RE  = _fv_re.compile(r'^(KE|KG)_[A-Z0-9]{2}_[A-Z]_\d{10}_\d{8}\.csv$', _fv_re.IGNORECASE)
@@ -5444,12 +5503,11 @@ class FileValidator(_AppBase):
         self._load_folders()
         self._poll_log()
 
+    @property
+    def _btn_data(self): return self._folders
+
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-                                  font=("Consolas", 9), anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
 
         outer = Frame(self, bg=BG)
         outer.pack(fill="both", expand=True, padx=24, pady=(12, 0))
@@ -5494,43 +5552,17 @@ class FileValidator(_AppBase):
         Label(hdr, text="CARTELLE DA VALIDARE", bg=BG_CARD, fg=TEXT_SEC,
               font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
 
-        def _icon_btn(parent, symbol, command, color=ACCENT, tip=""):
-            lbl = Label(parent, text=symbol, bg=BG_CARD, fg=color,
-                        font=("Consolas", 14), cursor="hand2", padx=10, pady=6)
-            lbl.bind("<Button-1>", lambda e: command())
-            lbl.bind("<Enter>",    lambda e: (lbl.configure(bg=BG_HOVER),
-                                              self._status_var.set(tip) if tip else None))
-            lbl.bind("<Leave>",    lambda e: (lbl.configure(bg=BG_CARD),
-                                              self._status_var.set("Pronto.")))
-            return lbl
-
-        _icon_btn(hdr, "🗑", self._remove_all, ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
-        self._btn = _icon_btn(hdr, "▶", self._start, ACCENT, "Avvia validazione")
+        self._make_icon_btn(hdr, "🗑", self._remove_all, ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
+        self._btn = self._make_icon_btn(hdr, "▶", self._start, ACCENT, "Avvia validazione")
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
 
         # ── Drop zone drag & drop cartelle ───────────────────────────────────
         dz_body = Frame(top, bg=BG_CARD)
         dz_body.pack(fill="x", padx=8, pady=(6, 2))
-        self._fv_drop_zone = Label(
-            dz_body,
-            text="\U0001f4c2  Trascina qui cartelle o file ZIP",
-            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
-            pady=10, cursor="hand2",
-            highlightthickness=1, highlightbackground=BORDER,
-        )
-        self._fv_drop_zone.pack(fill="x")
-        self._fv_drop_zone.bind("<Button-1>", lambda e: self._browse_folder())
-        self._fv_drop_zone.bind("<Enter>",
-            lambda e: self._fv_drop_zone.configure(highlightbackground=ACCENT))
-        self._fv_drop_zone.bind("<Leave>",
-            lambda e: self._fv_drop_zone.configure(highlightbackground=BORDER))
-        if _HAS_DND:
-            try:
-                self._fv_drop_zone.drop_target_register(_DND_FILES)
-                self._fv_drop_zone.dnd_bind("<<Drop>>", self._on_fv_dnd_drop)
-            except Exception:
-                pass
+        self._build_drop_zone(dz_body, "_fv_drop_zone",
+                              "\U0001f4c2  Trascina qui cartelle o file ZIP",
+                              self._browse_folder, self._on_fv_dnd_drop)
 
         # Canvas scrollabile per le righe cartelle
         canvas_frame = Frame(top, bg=BG_CARD)
@@ -5578,49 +5610,17 @@ class FileValidator(_AppBase):
         self.after(80, self._poll_log)
 
     def _fv_update_scroll(self, _e=None):
-        self._fv_canvas.update_idletasks()
-        content_h = self._fv_inner.winfo_reqheight()
-        canvas_h  = self._fv_canvas.winfo_height()
-        if content_h > canvas_h:
-            if not self._fv_vsb.winfo_ismapped():
-                self._fv_vsb.pack(side="right", fill="y")
-            self._fv_canvas.configure(scrollregion=(0, 0, 0, content_h))
-        else:
-            if self._fv_vsb.winfo_ismapped():
-                self._fv_vsb.pack_forget()
-            self._fv_canvas.configure(scrollregion=(0, 0, 0, canvas_h))
-            self._fv_canvas.yview_moveto(0)
+        self._update_scroll(self._fv_canvas, self._fv_inner, self._fv_vsb)
 
     def _render_rows(self):
-        for w in self._fv_inner.winfo_children():
-            w.destroy()
-        for path in self._folders:
-            row = Frame(self._fv_inner, bg=BG_CARD)
-            row.pack(fill="x", padx=6, pady=1)
-            x_lbl = Label(row, text="✕", bg=BG_CARD, fg=ERROR,
-                          font=("Consolas", 10, "bold"), cursor="hand2",
-                          padx=8, pady=4)
-            x_lbl.pack(side="left")
-            x_lbl.bind("<Button-1>", lambda e, p=path: self._remove_line(p))
-            x_lbl.bind("<Enter>",    lambda e, l=x_lbl: l.configure(bg=BG_HOVER))
-            x_lbl.bind("<Leave>",    lambda e, l=x_lbl: l.configure(bg=BG_CARD))
-            Label(row, text=path, bg=BG_CARD, fg=TEXT_PRI,
-                  font=("Consolas", 10), anchor="w", pady=4).pack(
-                  side="left", fill="x", expand=True)
-            Frame(self._fv_inner, bg=BORDER, height=1).pack(fill="x", padx=6)
-        self._fv_update_scroll()
-
-    def _update_btn_state(self):
-        has = bool(self._folders)
-        self._btn.configure(fg=ACCENT if has else TEXT_SEC,
-                            cursor="hand2" if has else "arrow")
+        super()._render_rows(self._fv_inner, self._folders, self._remove_line, self._fv_update_scroll)
 
     def _remove_line(self, path: str):
         if path in self._folders:
             self._folders.remove(path)
             self._render_rows()
             self._save_folders()
-            self._update_btn_state()
+            self._update_btn_state(self._folders)
 
     def _remove_all(self):
         if not self._folders:
@@ -5631,14 +5631,14 @@ class FileValidator(_AppBase):
         self._folders.clear()
         self._render_rows()
         self._save_folders()
-        self._update_btn_state()
+        self._update_btn_state(self._folders)
 
     def _load_folders(self):
         raw = _FV_TXT.read_text(encoding="utf-8") if _FV_TXT.exists() else ""
         self._folders = [l.strip() for l in raw.splitlines()
                          if l.strip() and not l.strip().startswith("#")]
         self._render_rows()
-        self._update_btn_state()
+        self._update_btn_state(self._folders)
 
     def _save_folders(self):
         try:
@@ -5656,7 +5656,7 @@ class FileValidator(_AppBase):
         self._folders.append(path)
         self._render_rows()
         self._save_folders()
-        self._update_btn_state()
+        self._update_btn_state(self._folders)
 
     def _browse_zip(self):
         paths = filedialog.askopenfilenames(
@@ -5671,7 +5671,7 @@ class FileValidator(_AppBase):
         if added:
             self._render_rows()
             self._save_folders()
-            self._update_btn_state()
+            self._update_btn_state(self._folders)
 
     def _on_fv_dnd_drop(self, event):
         import re
@@ -5688,17 +5688,7 @@ class FileValidator(_AppBase):
         if added:
             self._render_rows()
             self._save_folders()
-            self._update_btn_state()
-
-    def _on_done(self, success: bool):
-        self._running = False
-        if success:
-            self._status_var.set("✓ Validazione completata.")
-            self._btn.configure(fg=SUCCESS, cursor="hand2")
-        else:
-            self._status_var.set("✗ Terminato con errori o avvisi.")
-            self._btn.configure(fg=ERROR, cursor="hand2")
-        self.after(3000, self._update_btn_state)
+            self._update_btn_state(self._folders)
 
     def _start(self):
         if self._running or not self._folders:
@@ -6208,12 +6198,11 @@ class FolderMover(_AppBase):
         self._load_into_list()
         self._poll_log()
 
+    @property
+    def _btn_data(self): return self._pairs_data
+
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-                                  font=("Consolas", 9), anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
 
         body = Frame(self, bg=BG, highlightthickness=1, highlightbackground=BORDER)
         body.pack(fill="both", expand=True, padx=24, pady=(12, 0))
@@ -6231,19 +6220,9 @@ class FolderMover(_AppBase):
         Label(hdr, text="COPPIE  SORGENTE → DESTINAZIONE", bg=BG_CARD, fg=TEXT_SEC,
               font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
 
-        def _icon_btn(parent, symbol, command, color=ACCENT, tip=""):
-            lbl = Label(parent, text=symbol, bg=BG_CARD, fg=color,
-                        font=("Consolas", 14), cursor="hand2", padx=10, pady=6)
-            lbl.bind("<Button-1>", lambda e: command())
-            lbl.bind("<Enter>",    lambda e: (lbl.configure(bg=BG_HOVER),
-                                              self._status_var.set(tip) if tip else None))
-            lbl.bind("<Leave>",    lambda e: (lbl.configure(bg=BG_CARD),
-                                              self._status_var.set("Pronto.")))
-            return lbl
-
-        _icon_btn(hdr, "🗑", self._remove_all,  ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
-        _icon_btn(hdr, "+", self._browse_pair,  SUCCESS, "Aggiungi coppia").pack(side="right", padx=(0, 4))
-        self._btn = _icon_btn(hdr, "▶", self._start, ACCENT, "Avvia copia")
+        self._make_icon_btn(hdr, "🗑", self._remove_all,  ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
+        self._make_icon_btn(hdr, "+", self._browse_pair,  SUCCESS, "Aggiungi coppia").pack(side="right", padx=(0, 4))
+        self._btn = self._make_icon_btn(hdr, "▶", self._start, ACCENT, "Avvia copia")
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
 
@@ -6283,18 +6262,7 @@ class FolderMover(_AppBase):
         paned.add(bottom, minsize=100, stretch="always")
 
     def _fm_update_scroll(self, _e=None):
-        self._fm_canvas.update_idletasks()
-        content_h = self._fm_inner.winfo_reqheight()
-        canvas_h  = self._fm_canvas.winfo_height()
-        if content_h > canvas_h:
-            if not self._fm_vsb.winfo_ismapped():
-                self._fm_vsb.pack(side="right", fill="y")
-            self._fm_canvas.configure(scrollregion=(0, 0, 0, content_h))
-        else:
-            if self._fm_vsb.winfo_ismapped():
-                self._fm_vsb.pack_forget()
-            self._fm_canvas.configure(scrollregion=(0, 0, 0, canvas_h))
-            self._fm_canvas.yview_moveto(0)
+        self._update_scroll(self._fm_canvas, self._fm_inner, self._fm_vsb)
 
     def _poll_log(self):
         """Override: gestisce il livello 'progress' che sovrascrive l'ultima riga."""
@@ -6318,16 +6286,6 @@ class FolderMover(_AppBase):
             pass
         self.after(80, self._poll_log)
 
-    def _on_done(self, success: bool):
-        self._running = False
-        if success:
-            self._status_var.set("✓ Copia completata.")
-            self._btn.configure(fg=SUCCESS, cursor="hand2")
-        else:
-            self._status_var.set("✗ Terminato con errori o avvisi.")
-            self._btn.configure(fg=ERROR, cursor="hand2")
-        self.after(3000, self._update_btn_state)
-
     # ── Lista coppie ──────────────────────────────────────────────────────
 
     def _load_into_list(self):
@@ -6347,7 +6305,7 @@ class FolderMover(_AppBase):
             self._draw_pair_row(idx, src, dst)
         self._warn_label.configure(
             text=f"⚠  Riga orfana (senza destinazione): {orphan}" if orphan else "")
-        self._update_btn_state()
+        self._update_btn_state(self._pairs_data)
         self._fm_update_scroll()
 
     def _draw_pair_row(self, idx: int, src: str, dst: str):
@@ -6414,18 +6372,8 @@ class FolderMover(_AppBase):
         self._save_and_reload()
 
     def _save_and_reload(self):
-        lines = []
-        for src, dst in self._pairs_data:
-            lines.append(src)
-            lines.append(dst)
-        content = "\n".join(lines)
-        try:
-            _FM_TXT.parent.mkdir(parents=True, exist_ok=True)
-            _FM_TXT.write_text(content, encoding="utf-8")
-            self._status_var.set("✓ folders.txt salvato.")
-        except Exception as e:
-            messagebox.showerror("Errore salvataggio", str(e))
-        self._redraw_pairs()
+        lines = [l for src, dst in self._pairs_data for l in (src, dst)]
+        super()._save_and_reload(_FM_TXT, "\n".join(lines), self._redraw_pairs)
 
     def _browse_pair(self):
         src = filedialog.askdirectory(title="Seleziona cartella SORGENTE")
@@ -6443,11 +6391,6 @@ class FolderMover(_AppBase):
             return
         self._pairs_data.append((src, dst))
         self._save_and_reload()
-
-    def _update_btn_state(self):
-        has = bool(self._pairs_data)
-        self._btn.configure(fg=ACCENT if has else TEXT_SEC,
-                            cursor="hand2" if has else "arrow")
 
     def _start(self):
         if self._running or not self._pairs_data:
@@ -6581,15 +6524,14 @@ class ZipFolder(_AppBase):
         self._output_dir    = str(_ZF_DEFAULT_OUT)
         self._build_ui()
         self._load_into_list()
-        self._update_btn_state()
+        self._update_btn_state(self._folders_data)
         self._poll_log()
 
+    @property
+    def _btn_data(self): return self._folders_data
+
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-                                  font=("Consolas", 9), anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
 
         body = Frame(self, bg=BG, highlightthickness=1, highlightbackground=BORDER)
         body.pack(fill="both", expand=True, padx=24, pady=(12, 0))
@@ -6608,43 +6550,17 @@ class ZipFolder(_AppBase):
         Label(hdr, text="CARTELLE", bg=BG_CARD, fg=TEXT_SEC,
               font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
 
-        def _icon_btn(parent, symbol, command, color=ACCENT, tip=""):
-            lbl = Label(parent, text=symbol, bg=BG_CARD, fg=color,
-                        font=("Consolas", 14), cursor="hand2", padx=10, pady=6)
-            lbl.bind("<Button-1>", lambda e: command())
-            lbl.bind("<Enter>",    lambda e: (lbl.configure(bg=BG_HOVER),
-                                              self._status_var.set(tip) if tip else None))
-            lbl.bind("<Leave>",    lambda e: (lbl.configure(bg=BG_CARD),
-                                              self._status_var.set("Pronto.")))
-            return lbl
-
-        _icon_btn(hdr, "🗑", self._clear_all,    ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
-        self._btn = _icon_btn(hdr, "▶", self._start, ACCENT, "Avvia ZIP")
+        self._make_icon_btn(hdr, "🗑", self._clear_all,    ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
+        self._btn = self._make_icon_btn(hdr, "▶", self._start, ACCENT, "Avvia ZIP")
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
 
         # ── Drop zone drag & drop cartelle ───────────────────────────────────
         dz_body = Frame(top, bg=BG_CARD)
         dz_body.pack(fill="x", padx=8, pady=(6, 2))
-        self._zf_drop_zone = Label(
-            dz_body,
-            text="\U0001f4c2  Trascina qui una o più cartelle",
-            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
-            pady=10, cursor="hand2",
-            highlightthickness=1, highlightbackground=BORDER,
-        )
-        self._zf_drop_zone.pack(fill="x")
-        self._zf_drop_zone.bind("<Button-1>", lambda e: self._browse_folder())
-        self._zf_drop_zone.bind("<Enter>",
-            lambda e: self._zf_drop_zone.configure(highlightbackground=ACCENT))
-        self._zf_drop_zone.bind("<Leave>",
-            lambda e: self._zf_drop_zone.configure(highlightbackground=BORDER))
-        if _HAS_DND:
-            try:
-                self._zf_drop_zone.drop_target_register(_DND_FILES)
-                self._zf_drop_zone.dnd_bind("<<Drop>>", self._on_zf_dnd_drop)
-            except Exception:
-                pass
+        self._build_drop_zone(dz_body, "_zf_drop_zone",
+                              "\U0001f4c2  Trascina qui una o più cartelle",
+                              self._browse_folder, self._on_zf_dnd_drop)
 
         # Canvas scrollabile per lista cartelle
         canvas_frame = Frame(top, bg=BG_CARD)
@@ -6717,43 +6633,13 @@ class ZipFolder(_AppBase):
     # ── Lista cartelle ────────────────────────────────────────────────────
 
     def _zf_update_scroll(self, _e=None):
-        self._zf_canvas.update_idletasks()
-        content_h = self._zf_inner.winfo_reqheight()
-        canvas_h  = self._zf_canvas.winfo_height()
-        if content_h > canvas_h:
-            if not self._zf_vsb.winfo_ismapped():
-                self._zf_vsb.pack(side="right", fill="y")
-            self._zf_canvas.configure(scrollregion=(0, 0, 0, content_h))
-        else:
-            if self._zf_vsb.winfo_ismapped():
-                self._zf_vsb.pack_forget()
-            self._zf_canvas.configure(scrollregion=(0, 0, 0, canvas_h))
-            self._zf_canvas.yview_moveto(0)
+        self._update_scroll(self._zf_canvas, self._zf_inner, self._zf_vsb)
 
     def _load_into_list(self):
-        raw = _ZF_TXT.read_text(encoding="utf-8") if _ZF_TXT.exists() else ""
-        self._folders_data = [l.strip() for l in raw.splitlines() if l.strip()]
-        self._redraw_folders()
+        self._load_list_from_file(_ZF_TXT, "_folders_data", self._redraw_folders)
 
     def _redraw_folders(self):
-        for w in self._zf_inner.winfo_children():
-            w.destroy()
-        for path in self._folders_data:
-            row = Frame(self._zf_inner, bg=BG_CARD)
-            row.pack(fill="x", padx=6, pady=1)
-            x_lbl = Label(row, text="✕", bg=BG_CARD, fg=ERROR,
-                          font=("Consolas", 10, "bold"), cursor="hand2",
-                          padx=8, pady=4)
-            x_lbl.pack(side="left")
-            x_lbl.bind("<Button-1>", lambda e, p=path: self._remove_by_path(p))
-            x_lbl.bind("<Enter>",    lambda e, l=x_lbl: l.configure(bg=BG_HOVER))
-            x_lbl.bind("<Leave>",    lambda e, l=x_lbl: l.configure(bg=BG_CARD))
-            Label(row, text=path, bg=BG_CARD, fg=TEXT_PRI,
-                  font=("Consolas", 10), anchor="w", pady=4).pack(
-                  side="left", fill="x", expand=True)
-            Frame(self._zf_inner, bg=BORDER, height=1).pack(fill="x", padx=6)
-        self._update_btn_state()
-        self._zf_update_scroll()
+        self._render_rows(self._zf_inner, self._folders_data, self._remove_by_path, self._zf_update_scroll)
 
     def _remove_by_path(self, path):
         if path in self._folders_data:
@@ -6773,19 +6659,7 @@ class ZipFolder(_AppBase):
         self._save_and_reload()
 
     def _save_and_reload(self):
-        content = "\n".join(self._folders_data)
-        try:
-            _ZF_TXT.parent.mkdir(parents=True, exist_ok=True)
-            _ZF_TXT.write_text(content, encoding="utf-8")
-            self._status_var.set("✓ folders.txt salvato.")
-        except Exception as e:
-            messagebox.showerror("Errore salvataggio", str(e))
-        self._redraw_folders()
-
-    def _update_btn_state(self):
-        has = bool(self._folders_data)
-        self._btn.configure(fg=ACCENT if has else TEXT_SEC,
-                            cursor="hand2" if has else "arrow")
+        super()._save_and_reload(_ZF_TXT, "\n".join(self._folders_data), self._redraw_folders)
 
     def _browse_folder(self):
         path = filedialog.askdirectory(title="Seleziona cartella da zippare")
@@ -6844,19 +6718,12 @@ class ZipFolder(_AppBase):
             pass
         self.after(80, self._poll_log)
 
-    def _on_done(self, success: bool):
-        self._running = False
+    def _on_done_extra(self, success: bool):
         if success:
-            self._status_var.set("✓ ZIP completati.")
-            self._btn.configure(fg=SUCCESS, cursor="hand2")
             try:
                 os.startfile(self._out_var.get().strip() or str(_ZF_DEFAULT_OUT))
             except Exception:
                 pass
-        else:
-            self._status_var.set("✗ Terminato con errori o avvisi.")
-            self._btn.configure(fg=ERROR, cursor="hand2")
-        self.after(3000, self._update_btn_state)
 
     def _start(self):
         if self._running or not self._folders_data:
@@ -6882,21 +6749,21 @@ class ZipFolder(_AppBase):
 
 _PP_BASE = _HERE / "input" / "payment plans filter"
 _PP_FILTER_FILES = {
-    "agreement_id":           _PP_BASE / "filter_agreement_id.txt",
-    "supply_code_number":     _PP_BASE / "filter_prm_kraken.txt",
-    "agreement_id_plan_type": _PP_BASE / "filter_agreement_plan_type.txt",
+    "plan_id":            _PP_BASE / "filter_agreement_id.txt",
+    "supply_code_number": _PP_BASE / "filter_prm_kraken.txt",
+    "plan_id_plan_type":  _PP_BASE / "filter_agreement_plan_type.txt",
 }
 _PP_FILTER_LABELS = {
-    "agreement_id":           "Agreement ID",
-    "supply_code_number":     "Prm + Kraken Account",
-    "agreement_id_plan_type": "Agreement ID + Plan Type",
+    "plan_id":            "Plan ID",
+    "supply_code_number": "Prm + Kraken Account",
+    "plan_id_plan_type":  "Plan ID + Plan Type",
 }
 _PP_FILTER_KEY_OPTIONS = [
-    "Agreement ID", "Prm + Kraken Account", "Agreement ID + Plan Type"]
+    "Plan ID", "Prm + Kraken Account", "Plan ID + Plan Type"]
 _PP_FILTER_KEY_MAP = {
-    "Agreement ID":             "agreement_id",
-    "Prm + Kraken Account":     "supply_code_number",
-    "Agreement ID + Plan Type": "agreement_id_plan_type",
+    "Plan ID":              "plan_id",
+    "Prm + Kraken Account": "supply_code_number",
+    "Plan ID + Plan Type":  "plan_id_plan_type",
 }
 _PP_FILTER_KEY_MAP_INV = {v: k for k, v in _PP_FILTER_KEY_MAP.items()}
 _PP_DEFAULTS = {
@@ -6905,10 +6772,11 @@ _PP_DEFAULTS = {
     "PP_MAGHEGGIO":         "false",
     "PP_PROGRESS_INTERVAL": "100",
     "PP_AGREEMENT_ID_COL":  "0",
+    "PP_SAP_PLAN_ID_COL":   "12",
     "PP_NUMBER_COL":        "4",
     "PP_SUPPLY_CODE_COL":   "3",
     "PP_PLAN_TYPE_ID_COL":  "11",
-    "PP_FILTER_KEY":        "agreement_id",
+    "PP_FILTER_KEY":        "plan_id",
 }
 
 
@@ -6921,10 +6789,14 @@ def _pp_build_filter_key(columns, cfg):
     try:
         if key_type == "supply_code_number":
             return columns[cfg["supply_code_col"]] + ";" + columns[cfg["number_col"]]
-        elif key_type == "agreement_id_plan_type":
-            return columns[cfg["agreement_id_col"]] + ";" + columns[cfg["plan_type_id_col"]]
+        elif key_type == "plan_id_plan_type":
+            plan_id = (columns[cfg["agreement_id_col"]].strip()
+                       or columns[cfg["sap_plan_id_col"]].strip())
+            return plan_id + ";" + columns[cfg["plan_type_id_col"]]
         else:
-            return columns[cfg["agreement_id_col"]]
+            # plan_id: colonna 0 (agreement_id) oppure colonna 12 (sap plan id)
+            return (columns[cfg["agreement_id_col"]].strip()
+                    or columns[cfg["sap_plan_id_col"]].strip())
     except IndexError:
         return ""
 
@@ -6939,14 +6811,16 @@ def _pp_process_file(input_path, filter_set, output_path, cfg, log_fn):
             for line in f:
                 line = line.rstrip("\n")
                 cols = line.split(";")
-                agreement_id = cols[cfg["agreement_id_col"]] if cols else ""
-                distinct_old.add(agreement_id)
+                plan_id = ((cols[cfg["agreement_id_col"]].strip()
+                            or (cols[cfg["sap_plan_id_col"]].strip() if len(cols) > cfg["sap_plan_id_col"] else ""))
+                           if cols else "")
+                distinct_old.add(plan_id)
                 key = _pp_build_filter_key(cols, cfg)
                 if key in filter_set:
                     if magheggio:
                         line = line.replace(";C;", ";U;")
                     output_lines.append(line)
-                    distinct_new.add(agreement_id)
+                    distinct_new.add(plan_id)
         if not output_lines:
             log_fn(f"[INFO] {input_path.name} — tutte le righe filtrate, saltata.", "info")
             return len(distinct_old), set()
@@ -6975,7 +6849,7 @@ def pp_run_pipeline(cfg_data, log_fn, on_done):
         zip_out_dir.mkdir(parents=True, exist_ok=True)
         zip_path     = zip_out_dir / cfg_data["zip_filename"]
         filter_file   = _PP_FILTER_FILES.get(cfg_data["filter_key"],
-                                              _PP_FILTER_FILES["agreement_id"])
+                                              _PP_FILTER_FILES["plan_id"])
 
         if not input_folder.is_dir():
             log_fn(f"[ERRORE] Cartella input non trovata: {input_folder}", "error")
@@ -6997,10 +6871,10 @@ def pp_run_pipeline(cfg_data, log_fn, on_done):
                     filter_set.add(s)
         log_fn(f"[INFO] Filtro caricato: {len(filter_set)} ID", "info")
 
-        # In modalità agreement_id_plan_type estrai i plan type distinti dal filtro
+        # In modalità plan_id_plan_type estrai i plan type distinti dal filtro
         # per skippare i file il cui plan type non è nel set
         plan_type_whitelist = None
-        if cfg_data["filter_key"] == "agreement_id_plan_type":
+        if cfg_data["filter_key"] == "plan_id_plan_type":
             plan_type_whitelist = {
                 entry.split(";")[1].upper()
                 for entry in filter_set
@@ -7077,6 +6951,197 @@ def pp_run_pipeline(cfg_data, log_fn, on_done):
 
         _sh.rmtree(output_folder, ignore_errors=True)
 
+        log_fn("\n[INFO] Completato con successo.", "ok")
+        on_done(success=True)
+    except Exception as e:
+        log_fn(f"\n[ERRORE CRITICO] {e}", "error")
+        on_done(success=False)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# INVOICE FILTER (sotto-tab "Invoice" di File Filter)
+# ════════════════════════════════════════════════════════════════════════════
+
+_INV_BASE                    = _HERE / "input" / "file filter" / "invoice"
+_INV_FILTER_FILE_IDENTIFIER  = _INV_BASE / "filter_invoice_identifier.txt"
+_INV_FILTER_FILE_PRM_ACCOUNT = _INV_BASE / "filter_invoice_prm_account.txt"
+_INV_DEFAULTS = {
+    "INV_OUTPUT_SUBFOLDER": "output",
+    "INV_ZIP_FILENAME":     "invoice.zip",
+    "INV_FILTER_MODE":      "identifier",
+    "INV_COL_IDENTIFIER":   "0",
+    "INV_COL_PRM":          "9",
+    "INV_COL_ACCOUNT":      "10",
+    "INV_COL_AMOUNT":       "13",
+    "INV_COL_TYPE":         "2",
+}
+
+
+def _inv_get(key):
+    return _read_env_raw().get(key, _INV_DEFAULTS.get(key, ""))
+
+
+def _inv_format_header_amount(value):
+    return f"{value:.2f}"
+
+
+def _inv_process_file(input_path, filter_set, output_path, cfg, log_fn):
+    """
+    Filtra un CSV invoice tenendo solo le righe body il cui identifier (o prm+account)
+    è nel filter_set. Ricalcola header: col 1 = distinct identifier, col 3 = somma PCLI.
+    Ritorna (kept_count, distinct_identifiers, total_rows).
+    """
+    col_identifier = cfg["col_identifier"]
+    col_prm        = cfg["col_prm"]
+    col_account    = cfg["col_account"]
+    col_amount     = cfg["col_amount"]
+    col_type       = cfg["col_type"]
+    filter_mode    = cfg["filter_mode"]
+
+    try:
+        lines = input_path.read_text(encoding="utf-8").splitlines()
+        if not lines:
+            return 0, 0, 0
+        header = lines[0]
+        footer = None
+        body   = lines[1:]
+        if body and body[-1].endswith(";END"):
+            footer = body[-1]
+            body   = body[:-1]
+
+        output_lines      = []
+        kept_identifiers  = set()
+        pcli_sum          = 0.0
+        total_rows        = 0
+
+        for line in body:
+            if not line.strip():
+                continue
+            cols = line.split(";")
+            total_rows += 1
+            try:
+                identifier = cols[col_identifier].strip()
+                if filter_mode == "identifier":
+                    key = identifier
+                else:
+                    prm     = cols[col_prm].strip()
+                    account = cols[col_account].strip()
+                    key = f"{prm};{account}"
+            except IndexError:
+                log_fn(f"[WARN] {input_path.name} — riga con colonne insufficienti ignorata", "warn")
+                continue
+
+            if key not in filter_set:
+                continue
+
+            output_lines.append(line)
+            kept_identifiers.add(identifier)
+            try:
+                row_type = cols[col_type].strip()
+                if row_type == "PCLI":
+                    pcli_sum += float(cols[col_amount].replace(",", "."))
+            except (ValueError, IndexError):
+                pass
+
+        if not output_lines:
+            log_fn(f"[INFO] {input_path.name} — tutte le righe filtrate, saltata.", "info")
+            return 0, 0, total_rows
+
+        header_cols = header.split(";")
+        if len(header_cols) >= 4:
+            header_cols[1] = str(len(kept_identifiers))
+            header_cols[3] = _inv_format_header_amount(pcli_sum)
+        output_lines.insert(0, ";".join(header_cols))
+        if footer:
+            output_lines.append(footer)
+        output_path.write_text("\n".join(output_lines), encoding="utf-8", newline="\n")
+        log_fn(
+            f"[OK] {input_path.name}  →  "
+            f"{total_rows} originali / {len(output_lines) - 1 - (1 if footer else 0)} mantenute  "
+            f"[{len(kept_identifiers)} identifier distinti]", "ok")
+        return len(output_lines) - 1 - (1 if footer else 0), len(kept_identifiers), total_rows
+    except Exception as e:
+        log_fn(f"[ERRORE] {input_path.name}: {e}", "error")
+        return 0, 0, 0
+
+
+def inv_run_pipeline(cfg_data, log_fn, on_done):
+    try:
+        import shutil as _sh, re as _re
+        input_folder  = Path(cfg_data["input_folder"]).resolve()
+        out_sub       = cfg_data["output_subfolder"]
+        out_path      = Path(out_sub)
+        output_folder = out_path if out_path.is_absolute() else input_folder / out_sub
+        zip_out_dir   = _HERE / "output" / "file filter" / "invoice"
+        zip_out_dir.mkdir(parents=True, exist_ok=True)
+        zip_path      = zip_out_dir / cfg_data["zip_filename"]
+
+        if not input_folder.is_dir():
+            log_fn(f"[ERRORE] Cartella input non trovata: {input_folder}", "error")
+            on_done(success=False); return
+
+        filter_mode = cfg_data.get("filter_mode", "identifier")
+        filter_file = (_INV_FILTER_FILE_IDENTIFIER
+                       if filter_mode == "identifier"
+                       else _INV_FILTER_FILE_PRM_ACCOUNT)
+        if not filter_file.is_file():
+            log_fn(f"[ERRORE] File filtro non trovato: {filter_file}", "error")
+            on_done(success=False); return
+
+        if zip_path.exists():
+            zip_path.unlink()
+        if output_folder.exists():
+            _sh.rmtree(output_folder)
+        output_folder.mkdir(parents=True)
+        log_fn(f"[INFO] Cartella output: {output_folder}", "info")
+
+        filter_set = set()
+        with filter_file.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                s = line.strip()
+                if s:
+                    filter_set.add(s)
+        log_fn(f"[INFO] Filtro caricato: {len(filter_set)} chiavi", "info")
+
+        _INV_PAT = _re.compile(
+            r'^(KF|KR|KM|KK)_[EG]_\d{14}_\d{8}\.csv$', _re.IGNORECASE)
+        csv_files_all = sorted(input_folder.glob("*.csv"))
+        csv_files     = [f for f in csv_files_all if _INV_PAT.match(f.name)]
+        skipped_names = [f.name for f in csv_files_all if not _INV_PAT.match(f.name)]
+        if skipped_names:
+            log_fn(f"[WARN] {len(skipped_names)} file ignorati (nome non riconosciuto): "
+                   f"{', '.join(skipped_names[:3])}{'…' if len(skipped_names) > 3 else ''}", "warn")
+        if not csv_files:
+            log_fn("[ERRORE] Nessun file CSV Invoice valido trovato.", "error")
+            on_done(success=False); return
+
+        log_fn(f"\n[INFO] File da elaborare: {len(csv_files)}", "info")
+        total_kept_all      = 0
+        total_identifiers   = set()
+        files_written       = 0
+
+        for csv_path in csv_files:
+            kept, n_ids, _total = _inv_process_file(
+                csv_path, filter_set, output_folder / csv_path.name, cfg_data, log_fn)
+            total_kept_all    += kept
+            files_written     += 1 if kept > 0 else 0
+
+        output_files = [f for f in output_folder.rglob("*") if f.is_file()]
+        log_fn("\n── Riepilogo ──", "section")
+        log_fn(f"[INFO] File generati: {files_written} su {len(csv_files)} analizzati", "info")
+        log_fn(f"[INFO] Righe mantenute post filtro: {total_kept_all}", "info")
+
+        if output_files:
+            import zipfile as _zf_inv
+            log_fn(f"\n[INFO] ZIP: {zip_path.name} ...", "info")
+            with _zf_inv.ZipFile(zip_path, "w", _zf_inv.ZIP_DEFLATED, compresslevel=1) as zf:
+                for file in output_files:
+                    zf.write(file, file.relative_to(output_folder))
+            log_fn(f"[OK] ZIP creato: {zip_path}", "ok")
+        else:
+            log_fn("[WARN] Nessun file da comprimere.", "warn")
+
+        _sh.rmtree(output_folder, ignore_errors=True)
         log_fn("\n[INFO] Completato con successo.", "ok")
         on_done(success=True)
     except Exception as e:
@@ -7299,7 +7364,7 @@ def pay_run_pipeline(cfg_data, log_fn, on_done):
         on_done(success=False)
 
 
-class PaymentPlansFilter(_AppBase):
+class FileFilter(_AppBase):
 
     def __init__(self, master):
         super().__init__(master, bg=BG)
@@ -7309,19 +7374,21 @@ class PaymentPlansFilter(_AppBase):
         self._filter_counts = {}
         self._pay_log_queue = queue.Queue()
         self._pay_running    = False
+        self._inv_log_queue  = queue.Queue()
+        self._inv_running    = False
         self._build_ui()
         self._load_fields()
         self._load_all_filters()
         self._load_pay_filter()
+        self._load_inv_filters()
         self._poll_log()
         self._poll_pay_log()
 
+    @property
+    def _btn_data(self): return True
+
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-                                  font=("Consolas", 9), anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
         self._init_pp_styles()
         self._build_notebook([
             ("▶  Pipeline",      self._build_pipeline_tab),
@@ -7358,6 +7425,9 @@ class PaymentPlansFilter(_AppBase):
         pp_tab = Frame(sub_nb, bg=BG)
         sub_nb.add(pp_tab, text="  Payment Plans  ")
         self._build_payment_plans_subtab(pp_tab)
+        inv_tab = Frame(sub_nb, bg=BG)
+        sub_nb.add(inv_tab, text="  Invoice  ")
+        self._build_invoice_subtab(inv_tab)
         pay_tab = Frame(sub_nb, bg=BG)
         sub_nb.add(pay_tab, text="  Payments  ")
         self._build_payment_subtab(pay_tab)
@@ -7375,17 +7445,7 @@ class PaymentPlansFilter(_AppBase):
         Label(hdr, text="ESECUZIONE", bg=BG_CARD, fg=TEXT_SEC,
               font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
 
-        def _icon_btn(symbol, command, color=ACCENT, tip=""):
-            lbl = Label(hdr, text=symbol, bg=BG_CARD, fg=color,
-                        font=("Consolas", 14), cursor="hand2", padx=10, pady=6)
-            lbl.bind("<Button-1>", lambda e: command())
-            lbl.bind("<Enter>",    lambda e: (lbl.configure(bg=BG_HOVER),
-                                              self._status_var.set(tip) if tip else None))
-            lbl.bind("<Leave>",    lambda e: (lbl.configure(bg=BG_CARD),
-                                              self._status_var.set("Pronto.")))
-            return lbl
-
-        self._btn = _icon_btn("▶", self._start, ACCENT, "Avvia pipeline")
+        self._btn = self._make_icon_btn(hdr, "▶", self._start, ACCENT, "Avvia pipeline")
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
 
@@ -7411,25 +7471,9 @@ class PaymentPlansFilter(_AppBase):
 
         dz_frame = Frame(top, bg=BG_CARD)
         dz_frame.pack(fill="x", padx=8, pady=(0, 4))
-        self._pp_drop_zone = Label(
-            dz_frame,
-            text="\U0001f4c2  Trascina qui la cartella input",
-            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
-            pady=8, cursor="hand2",
-            highlightthickness=1, highlightbackground=BORDER,
-        )
-        self._pp_drop_zone.pack(fill="x")
-        self._pp_drop_zone.bind("<Button-1>", _browse_input)
-        self._pp_drop_zone.bind("<Enter>",
-            lambda e: self._pp_drop_zone.configure(highlightbackground=ACCENT))
-        self._pp_drop_zone.bind("<Leave>",
-            lambda e: self._pp_drop_zone.configure(highlightbackground=BORDER))
-        if _HAS_DND:
-            try:
-                self._pp_drop_zone.drop_target_register(_DND_FILES)
-                self._pp_drop_zone.dnd_bind("<<Drop>>", self._on_pp_dnd_drop)
-            except Exception:
-                pass
+        self._build_drop_zone(dz_frame, "_pp_drop_zone",
+                              "\U0001f4c2  Trascina qui la cartella input",
+                              _browse_input, self._on_pp_dnd_drop)
 
         row2 = Frame(top, bg=BG_CARD)
         row2.pack(fill="x", padx=14, pady=(0, 8))
@@ -7504,17 +7548,7 @@ class PaymentPlansFilter(_AppBase):
         Label(hdr, text="ESECUZIONE", bg=BG_CARD, fg=TEXT_SEC,
               font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
 
-        def _icon_btn(symbol, command, color=ACCENT, tip=""):
-            lbl = Label(hdr, text=symbol, bg=BG_CARD, fg=color,
-                        font=("Consolas", 14), cursor="hand2", padx=10, pady=6)
-            lbl.bind("<Button-1>", lambda e: command())
-            lbl.bind("<Enter>",    lambda e: (lbl.configure(bg=BG_HOVER),
-                                              self._status_var.set(tip) if tip else None))
-            lbl.bind("<Leave>",    lambda e: (lbl.configure(bg=BG_CARD),
-                                              self._status_var.set("Pronto.")))
-            return lbl
-
-        self._pay_btn = _icon_btn("▶", self._pay_start, ACCENT, "Avvia pipeline")
+        self._pay_btn = self._make_icon_btn(hdr, "▶", self._pay_start, ACCENT, "Avvia pipeline")
         self._pay_btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
 
@@ -7540,25 +7574,9 @@ class PaymentPlansFilter(_AppBase):
 
         dz_frame = Frame(top, bg=BG_CARD)
         dz_frame.pack(fill="x", padx=8, pady=(0, 4))
-        self._pay_drop_zone = Label(
-            dz_frame,
-            text="\U0001f4c2  Trascina qui la cartella input",
-            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
-            pady=8, cursor="hand2",
-            highlightthickness=1, highlightbackground=BORDER,
-        )
-        self._pay_drop_zone.pack(fill="x")
-        self._pay_drop_zone.bind("<Button-1>", _browse_input)
-        self._pay_drop_zone.bind("<Enter>",
-            lambda e: self._pay_drop_zone.configure(highlightbackground=ACCENT))
-        self._pay_drop_zone.bind("<Leave>",
-            lambda e: self._pay_drop_zone.configure(highlightbackground=BORDER))
-        if _HAS_DND:
-            try:
-                self._pay_drop_zone.drop_target_register(_DND_FILES)
-                self._pay_drop_zone.dnd_bind("<<Drop>>", self._on_pay_dnd_drop)
-            except Exception:
-                pass
+        self._build_drop_zone(dz_frame, "_pay_drop_zone",
+                              "\U0001f4c2  Trascina qui la cartella input",
+                              _browse_input, self._on_pay_dnd_drop)
 
         row2 = Frame(top, bg=BG_CARD)
         row2.pack(fill="x", padx=14, pady=(0, 8))
@@ -7629,6 +7647,88 @@ class PaymentPlansFilter(_AppBase):
         self._build_pay_log_panel(log_frame, on_clear=self._pay_clear_log)
         self._update_pay_input_label()
 
+    def _build_invoice_subtab(self, parent):
+        body = Frame(parent, bg=BG)
+        body.pack(fill="both", expand=True)
+
+        top = Frame(body, bg=BG_CARD, bd=0, highlightthickness=1,
+                    highlightbackground=BORDER)
+        top.pack(fill="x", pady=(0, 8))
+
+        hdr = Frame(top, bg=BG_CARD)
+        hdr.pack(fill="x")
+        Label(hdr, text="ESECUZIONE", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
+
+        self._inv_btn = self._make_icon_btn(hdr, "▶", self._inv_start, ACCENT, "Avvia pipeline")
+        self._inv_btn.pack(side="right", padx=(0, 8))
+        Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
+
+        row1 = Frame(top, bg=BG_CARD)
+        row1.pack(fill="x", padx=14, pady=(8, 4))
+        Label(row1, text="Cartella input:", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 9), width=14, anchor="w").pack(side="left")
+        browse_btn = Label(row1, text="\U0001f4c1", bg=BG_CARD, fg=TEXT_SEC,
+                           font=("Consolas", 11), cursor="hand2", padx=4)
+        browse_btn.pack(side="left")
+        self._inv_input_lbl = Label(row1, text="—", bg=BG_CARD, fg=ACCENT,
+                                    font=("Consolas", 9), anchor="w")
+        self._inv_input_lbl.pack(side="left", fill="x", expand=True)
+
+        def _browse_inv(e=None):
+            folder = filedialog.askdirectory(title="Seleziona cartella input Invoice")
+            if folder:
+                _write_env({"INV_INPUT_FOLDER": folder})
+                self._update_inv_input_label()
+
+        browse_btn.bind("<Button-1>", _browse_inv)
+        self._inv_input_lbl.bind("<Button-1>", _browse_inv)
+
+        dz_frame = Frame(top, bg=BG_CARD)
+        dz_frame.pack(fill="x", padx=8, pady=(0, 4))
+        self._build_drop_zone(dz_frame, "_inv_drop_zone",
+                              "\U0001f4c2  Trascina qui la cartella input",
+                              _browse_inv, self._on_inv_dnd_drop)
+
+        row2 = Frame(top, bg=BG_CARD)
+        row2.pack(fill="x", padx=14, pady=(0, 8))
+        Label(row2, text="Chiave filtro:", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 9), width=14, anchor="w").pack(side="left")
+        _INV_MODE_OPTIONS = ["Identifier", "Prm + Kraken Account"]
+        _INV_MODE_MAP     = {"Identifier": "identifier", "Prm + Kraken Account": "prm_account"}
+        _INV_MODE_MAP_INV = {v: k for k, v in _INV_MODE_MAP.items()}
+        saved_mode = _inv_get("INV_FILTER_MODE")
+        self._inv_mode_var = tkinter.StringVar(
+            value=_INV_MODE_MAP_INV.get(saved_mode, "Identifier"))
+        fk_btn = Frame(row2, bg=BG_INPUT, highlightthickness=1,
+                       highlightbackground=BORDER, cursor="hand2")
+        fk_btn.pack(side="left")
+        fk_lbl = Label(fk_btn, textvariable=self._inv_mode_var, bg=BG_INPUT, fg=TEXT_PRI,
+                       font=("Consolas", 9), padx=10, pady=4, width=24, anchor="w")
+        fk_lbl.pack(side="left")
+        Label(fk_btn, text="▾", bg=BG_INPUT, fg=TEXT_SEC,
+              font=("Consolas", 9), padx=6).pack(side="left")
+
+        def _open_inv_mode_menu(e=None):
+            menu = tkinter.Menu(self, tearoff=0, bg=BG_CARD2, fg=TEXT_PRI,
+                                activebackground=ACCENT2, activeforeground=TEXT_PRI,
+                                font=("Consolas", 9), bd=0, relief="flat")
+            for opt in _INV_MODE_OPTIONS:
+                menu.add_command(label=opt, command=lambda o=opt, m=_INV_MODE_MAP: (
+                    self._inv_mode_var.set(o),
+                    _write_env({"INV_FILTER_MODE": m.get(o, "identifier")})))
+            menu.post(fk_btn.winfo_rootx(),
+                      fk_btn.winfo_rooty() + fk_btn.winfo_height())
+
+        fk_btn.bind("<Button-1>", _open_inv_mode_menu)
+        fk_lbl.bind("<Button-1>", _open_inv_mode_menu)
+
+        log_frame = Frame(body, bg=BG_CARD, bd=0, highlightthickness=1,
+                          highlightbackground=BORDER)
+        log_frame.pack(fill="both", expand=True)
+        self._build_inv_log_panel(log_frame)
+        self._update_inv_input_label()
+
     # ── Tab Filtro ────────────────────────────────────────────────────────
 
     def _build_filter_tab(self, parent):
@@ -7637,6 +7737,9 @@ class PaymentPlansFilter(_AppBase):
         pp_tab = Frame(sub_nb, bg=BG)
         sub_nb.add(pp_tab, text="  Payment Plans  ")
         self._build_filter_payment_plans_subtab(pp_tab)
+        inv_tab = Frame(sub_nb, bg=BG)
+        sub_nb.add(inv_tab, text="  Invoice  ")
+        self._build_filter_invoice_subtab(inv_tab)
         pay_tab = Frame(sub_nb, bg=BG)
         sub_nb.add(pay_tab, text="  Payments  ")
         self._build_filter_payment_subtab(pay_tab)
@@ -7672,10 +7775,18 @@ class PaymentPlansFilter(_AppBase):
                             highlightthickness=1, highlightbackground=BORDER)
         table_frame.pack(fill="both", expand=True, padx=16, pady=(0, 4))
 
-        tree = ttk.Treeview(table_frame, columns=("id",), show="headings",
-                            style="PPFilter.Treeview", selectmode="browse")
-        tree.heading("id", text="ID Filtro")
-        tree.column("id", width=500, minwidth=200, anchor="w")
+        if internal_key == "supply_code_number":
+            tree = ttk.Treeview(table_frame, columns=("prm", "kraken"), show="headings",
+                                style="PPFilter.Treeview", selectmode="browse")
+            tree.heading("prm",    text="PRM")
+            tree.heading("kraken", text="Kraken Account")
+            tree.column("prm",    width=260, minwidth=120, anchor="w")
+            tree.column("kraken", width=240, minwidth=120, anchor="w")
+        else:
+            tree = ttk.Treeview(table_frame, columns=("id",), show="headings",
+                                style="PPFilter.Treeview", selectmode="browse")
+            tree.heading("id", text="ID Filtro")
+            tree.column("id", width=500, minwidth=200, anchor="w")
         vsb = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview,
                             style="Dark.Vertical.TScrollbar")
         vsb.pack(side="right", fill="y")
@@ -7752,6 +7863,137 @@ class PaymentPlansFilter(_AppBase):
               font=("Consolas", 9), anchor="w",
               pady=4).pack(fill="x", padx=16)
 
+    def _build_filter_invoice_subtab(self, parent):
+        sub_nb = ttk.Notebook(parent, style="PPSub.TNotebook")
+        sub_nb.pack(fill="both", expand=True)
+
+        tab_id = Frame(sub_nb, bg=BG)
+        sub_nb.add(tab_id, text="  Identifier  ")
+        self._build_inv_filter_key_tab(
+            tab_id, "Identifier",
+            attr_tree="_inv_filter_tree_identifier",
+            attr_count="_inv_filter_count_var_identifier",
+            paste_cmd=lambda: self._inv_filter_paste_popup("identifier"),
+            clear_cmd=lambda: self._inv_filter_clear("identifier"))
+
+        tab_prm = Frame(sub_nb, bg=BG)
+        sub_nb.add(tab_prm, text="  Prm + Kraken Account  ")
+        self._build_inv_filter_key_tab(
+            tab_prm, "Prm + Kraken Account",
+            attr_tree="_inv_filter_tree_prm_account",
+            attr_count="_inv_filter_count_var_prm_account",
+            paste_cmd=lambda: self._inv_filter_paste_popup("prm_account"),
+            clear_cmd=lambda: self._inv_filter_clear("prm_account"),
+            two_column=True)
+
+    def _build_inv_filter_key_tab(self, parent, label, attr_tree, attr_count,
+                                   paste_cmd, clear_cmd, two_column=False):
+        hdr = Frame(parent, bg=BG)
+        hdr.pack(fill="x", padx=16, pady=(12, 0))
+        Label(hdr, text=label, bg=BG, fg=TEXT_PRI,
+              font=("Consolas", 11, "bold")).pack(side="left")
+        Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(8, 0))
+        Label(parent, text="Ogni riga rappresenta una chiave da mantenere nel filtraggio.",
+              bg=BG, fg=TEXT_SEC, font=("Consolas", 9), anchor="w",
+              pady=6).pack(fill="x", padx=16)
+
+        toolbar = Frame(parent, bg=BG)
+        toolbar.pack(fill="x", padx=16, pady=(0, 6))
+        self._make_btn(toolbar, "✏️  Modifica / Aggiungi",
+                       paste_cmd, color=SUCCESS).pack(side="left", padx=(0, 6))
+        self._make_btn(toolbar, "\U0001f5d1  Svuota righe",
+                       clear_cmd, color=ERROR).pack(side="left")
+
+        table_frame = Frame(parent, bg=BG_CARD,
+                            highlightthickness=1, highlightbackground=BORDER)
+        table_frame.pack(fill="both", expand=True, padx=16, pady=(0, 4))
+
+        if two_column:
+            cols = ("prm", "kraken")
+            tree = ttk.Treeview(table_frame, columns=cols, show="headings",
+                                style="PPFilter.Treeview", selectmode="browse")
+            tree.heading("prm",    text="PRM")
+            tree.heading("kraken", text="Kraken Account")
+            tree.column("prm",    width=260, minwidth=120, anchor="w")
+            tree.column("kraken", width=240, minwidth=120, anchor="w")
+        else:
+            tree = ttk.Treeview(table_frame, columns=("id",), show="headings",
+                                style="PPFilter.Treeview", selectmode="browse")
+            tree.heading("id", text="Chiave Filtro")
+            tree.column("id", width=500, minwidth=200, anchor="w")
+        vsb = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview,
+                            style="Dark.Vertical.TScrollbar")
+        vsb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=vsb.set)
+        tree.pack(fill="both", expand=True)
+        setattr(self, attr_tree, tree)
+
+        count_var = tkinter.StringVar(value="")
+        setattr(self, attr_count, count_var)
+        Label(parent, textvariable=count_var, bg=BG, fg=TEXT_SEC,
+              font=("Consolas", 9), anchor="w",
+              pady=4).pack(fill="x", padx=16)
+
+    def _inv_filter_paste_popup(self, mode):
+        filter_file = (_INV_FILTER_FILE_IDENTIFIER if mode == "identifier"
+                       else _INV_FILTER_FILE_PRM_ACCOUNT)
+        attr_tree  = f"_inv_filter_tree_{mode}"
+        attr_count = f"_inv_filter_count_var_{mode}"
+        tree      = getattr(self, attr_tree)
+        count_var = getattr(self, attr_count)
+
+        if mode == "prm_account":
+            self._prm_account_paste_popup(
+                tree=tree, count_var=count_var,
+                save_fn=lambda: self._save_inv_filter_for(attr_tree, filter_file))
+            return
+
+        def _validate(raw):
+            _fmt_hint = "Formato atteso: EB... o GB... seguito da caratteri alfanumerici"
+            stripped = [(i, line.strip()) for i, line in enumerate(raw) if line.strip()]
+            invalid_nos = [i + 1 for i, k in stripped if not _RE_IDENTIFIER.match(k)]
+            valid = [k for i, k in stripped if _RE_IDENTIFIER.match(k)]
+            n = len(invalid_nos)
+            error_msg = f"⚠  {n} {'chiave non valida' if n == 1 else 'chiavi non valide'}.\n{_fmt_hint}" if invalid_nos else ""
+            return valid, invalid_nos, error_msg
+
+        self._paste_popup(
+            title="Modifica / Aggiungi — Identifier",
+            subtitle="Una chiave per riga. Righe vuote verranno ignorate.",
+            tree=tree, count_var=count_var,
+            empty_warning="⚠  Nessuna chiave trovata.",
+            count_label_fn=lambda n: f"{n} chiavi.",
+            save_fn=lambda: self._save_inv_filter_for(attr_tree, filter_file),
+            validate_fn=_validate,
+        )
+
+    def _inv_filter_clear(self, mode):
+        filter_file = (_INV_FILTER_FILE_IDENTIFIER if mode == "identifier"
+                       else _INV_FILTER_FILE_PRM_ACCOUNT)
+        attr_tree  = f"_inv_filter_tree_{mode}"
+        attr_count = f"_inv_filter_count_var_{mode}"
+        tree      = getattr(self, attr_tree)
+        count_var = getattr(self, attr_count)
+        if not tree.get_children():
+            return
+        if messagebox.askyesno("Svuota filtro", "Rimuovere tutte le chiavi?"):
+            tree.delete(*tree.get_children())
+            count_var.set("0 chiavi.")
+            self._save_inv_filter_for(attr_tree, filter_file)
+
+    def _save_inv_filter_for(self, attr_tree, filter_file):
+        self._save_filter_to_file(getattr(self, attr_tree), filter_file)
+
+    def _load_inv_filters(self):
+        for attr_tree, attr_count, filter_file in [
+            ("_inv_filter_tree_identifier",  "_inv_filter_count_var_identifier",  _INV_FILTER_FILE_IDENTIFIER),
+            ("_inv_filter_tree_prm_account", "_inv_filter_count_var_prm_account", _INV_FILTER_FILE_PRM_ACCOUNT),
+        ]:
+            tree = getattr(self, attr_tree, None)
+            if not tree:
+                continue
+            self._load_filter_from_file(tree, filter_file, getattr(self, attr_count, None))
+
     # ── Tab Impostazioni ──────────────────────────────────────────────────
 
     # ── Filtro helpers ────────────────────────────────────────────────────
@@ -7761,103 +8003,34 @@ class PaymentPlansFilter(_AppBase):
             self._load_filter(key)
 
     def _load_filter(self, internal_key):
-        tree      = self._filter_trees.get(internal_key)
-        count_var = self._filter_counts.get(internal_key)
+        tree = self._filter_trees.get(internal_key)
         if not tree:
             return
-        for row in tree.get_children():
-            tree.delete(row)
-        filter_file = _PP_FILTER_FILES[internal_key]
-        if not filter_file.exists():
-            if count_var:
-                count_var.set("File non trovato.")
-            return
-        lines = filter_file.read_text(encoding="utf-8").strip().splitlines()
-        count = 0
-        for line in lines:
-            line = line.strip()
-            if line:
-                tree.insert("", "end", values=(line,))
-                count += 1
-        if count_var:
-            count_var.set(f"{count} ID caricati.")
+        self._load_filter_from_file(tree, _PP_FILTER_FILES[internal_key], self._filter_counts.get(internal_key))
 
     def _filter_paste_popup(self, internal_key):
         import re as _re
         tree      = self._filter_trees[internal_key]
         count_var = self._filter_counts[internal_key]
-        label     = _PP_FILTER_LABELS[internal_key]
-        W, H = 500, 420
-        popup = tkinter.Toplevel(self)
-        popup.title(f"Modifica / Aggiungi \u2014 {label}")
-        popup.configure(bg=BG)
-        popup.resizable(False, False)
-        popup.grab_set()
-        popup.update_idletasks()
-        x = (popup.winfo_screenwidth()  - W) // 2
-        y = (popup.winfo_screenheight() - H) // 2
-        popup.geometry(f"{W}x{H}+{x}+{y}")
-
-        Label(popup, text=f"Modifica / Aggiungi \u2014 {label}",
-              bg=BG, fg=TEXT_PRI, font=("Consolas", 11, "bold"), pady=12).pack()
-        Label(popup, text="Un ID per riga. Righe vuote verranno ignorate.",
-              bg=BG, fg=TEXT_SEC, font=("Consolas", 9), justify="center").pack()
-        Frame(popup, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(8, 0))
-
-        btn_row = Frame(popup, bg=BG)
-        btn_row.pack(side="bottom", fill="x", padx=16, pady=12)
-        tkinter.Button(btn_row, text="Annulla", bg=BG_CARD, fg=TEXT_SEC,
-                       activebackground=BG_HOVER, activeforeground=TEXT_PRI,
-                       font=("Consolas", 10, "bold"), relief="flat",
-                       cursor="hand2", pady=6, padx=14, bd=0,
-                       command=popup.destroy).pack(side="right", padx=(6, 0))
-        btn_conferma = tkinter.Button(btn_row, text="\u2713  Conferma",
-                                      bg=ACCENT, fg="#ffffff",
-                                      activebackground="#3a7ee8",
-                                      activeforeground="#ffffff",
-                                      font=("Consolas", 10, "bold"),
-                                      relief="flat", cursor="hand2",
-                                      pady=6, padx=14, bd=0)
-        btn_conferma.pack(side="right")
-
-        feedback_var = tkinter.StringVar(value="")
-        Label(popup, textvariable=feedback_var, bg=BG, fg=WARNING,
-              font=("Consolas", 9), pady=4).pack(side="bottom", fill="x", padx=16)
-
-        txt_frame = Frame(popup, bg=BG_CARD)
-        txt_frame.pack(fill="both", expand=True, padx=16, pady=(8, 0))
-        vsb = ttk.Scrollbar(txt_frame, style="Dark.Vertical.TScrollbar")
-        vsb.pack(side="right", fill="y")
-        txt = tkinter.Text(txt_frame, bg=BG_INPUT, fg=TEXT_PRI,
-                           font=("Consolas", 10), relief="flat", bd=0,
-                           insertbackground=TEXT_PRI, wrap="none",
-                           padx=8, pady=6, yscrollcommand=vsb.set)
-        txt.pack(fill="both", expand=True)
-        vsb.config(command=txt.yview)
-        txt.focus_set()
-
-        existing = [tree.item(iid, "values")[0] for iid in tree.get_children()]
-        if existing:
-            txt.insert("1.0", "\n".join(existing))
-        txt.tag_configure("invalid", foreground=WARNING, background="#2a1f00")
+        if internal_key == "supply_code_number":
+            self._prm_account_paste_popup(
+                tree=tree, count_var=count_var,
+                save_fn=lambda: self._save_filter(internal_key))
+            return
+        label = _PP_FILTER_LABELS[internal_key]
 
         def _is_valid_id(v):
             return bool(_re.fullmatch(r'\d+(\.\d+)*', v))
 
-        def _on_conferma():
-            raw = txt.get("1.0", "end").strip().splitlines()
-            txt.tag_remove("invalid", "1.0", "end")
-            valid, invalid = [], []
+        def _validate(raw):
+            valid, invalid_nos = [], []
             for i, line in enumerate(raw):
                 line = line.strip()
                 if not line:
                     continue
-                if internal_key == "supply_code_number":
-                    parts = line.split(";")
-                    ok = len(parts) == 2 and parts[1].startswith("A-")
-                elif internal_key == "agreement_id":
+                if internal_key == "plan_id":
                     ok = _is_valid_id(line)
-                elif internal_key == "agreement_id_plan_type":
+                elif internal_key == "plan_id_plan_type":
                     parts = line.split(";")
                     ok = (len(parts) == 2 and _is_valid_id(parts[0])
                           and parts[1] in ("M", "C", "R", "U"))
@@ -7866,30 +8039,24 @@ class PaymentPlansFilter(_AppBase):
                 if ok:
                     valid.append(line)
                 else:
-                    invalid.append(i + 1)
-                    txt.tag_add("invalid", f"{i+1}.0", f"{i+1}.end")
+                    invalid_nos.append(i + 1)
+            msgs = {
+                "plan_id":                "solo numeri (es. 12345 o 12345.6)",
+                "plan_id_plan_type": "formato atteso: numero;M|C|R|U",
+            }
+            error_msg = (f"\u26a0  {len(invalid_nos)} riga/e non valida/e \u2014 "
+                         f"{msgs.get(internal_key, '')}" if invalid_nos else "")
+            return valid, invalid_nos, error_msg
 
-            if invalid:
-                msgs = {
-                    "supply_code_number":     "formato atteso: prm;A-xxxxxxxx",
-                    "agreement_id":           "solo numeri (es. 12345 o 12345.6)",
-                    "agreement_id_plan_type": "formato atteso: numero;M|C|R|U",
-                }
-                feedback_var.set(
-                    f"\u26a0  {len(invalid)} riga/e non valida/e \u2014 "
-                    f"{msgs.get(internal_key, '')}")
-                return
-            if not valid:
-                feedback_var.set("\u26a0  Nessun ID trovato.")
-                return
-            tree.delete(*tree.get_children())
-            for v in valid:
-                tree.insert("", "end", values=(v,))
-            count_var.set(f"{len(valid)} ID.")
-            self._save_filter(internal_key)
-            popup.destroy()
-
-        btn_conferma.config(command=_on_conferma)
+        self._paste_popup(
+            title=f"Modifica / Aggiungi \u2014 {label}",
+            subtitle="Un ID per riga. Righe vuote verranno ignorate.",
+            tree=tree, count_var=count_var,
+            empty_warning="\u26a0  Nessun ID trovato.",
+            count_label_fn=lambda n: f"{n} ID.",
+            save_fn=lambda: self._save_filter(internal_key),
+            validate_fn=_validate,
+        )
 
     def _filter_clear_all(self, internal_key):
         tree      = self._filter_trees[internal_key]
@@ -7902,18 +8069,7 @@ class PaymentPlansFilter(_AppBase):
             self._save_filter(internal_key)
 
     def _save_filter(self, internal_key):
-        tree        = self._filter_trees[internal_key]
-        filter_file = _PP_FILTER_FILES[internal_key]
-        rows = [tree.item(iid, "values")[0] for iid in tree.get_children()
-                if tree.item(iid, "values")]
-        try:
-            filter_file.parent.mkdir(parents=True, exist_ok=True)
-            filter_file.write_text(("\n".join(rows) + "\n") if rows else "",
-                                   encoding="utf-8")
-            self._status_var.set(
-                f"\u2713 {filter_file.name} salvato ({len(rows)} ID).")
-        except Exception as e:
-            messagebox.showerror("Errore salvataggio filtro", str(e))
+        self._save_filter_to_file(self._filter_trees[internal_key], _PP_FILTER_FILES[internal_key])
 
     # \u2500\u2500 Filtro Payment helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
@@ -7929,20 +8085,7 @@ class PaymentPlansFilter(_AppBase):
         tree = getattr(self, attr_tree, None)
         if not tree:
             return
-        for row in tree.get_children():
-            tree.delete(row)
-        count_var = getattr(self, attr_count)
-        if not filter_file.exists():
-            count_var.set("File non trovato.")
-            return
-        lines = filter_file.read_text(encoding="utf-8").strip().splitlines()
-        count = 0
-        for line in lines:
-            line = line.strip()
-            if line:
-                tree.insert("", "end", values=(line,))
-                count += 1
-        count_var.set(f"{count} chiavi caricate.")
+        self._load_filter_from_file(tree, filter_file, getattr(self, attr_count))
 
     def _pay_filter_paste_popup_simple(self):
         self._pay_filter_paste_popup_for(
@@ -7955,98 +8098,37 @@ class PaymentPlansFilter(_AppBase):
             _PAY_FILTER_FILE_COMPOSITE, "Reference + Data + Tipo (PAYMENT/REJECT)")
 
     def _pay_filter_paste_popup_for(self, attr_tree, attr_count, filter_file, label):
+        import re as _re
         tree      = getattr(self, attr_tree)
         count_var = getattr(self, attr_count)
-        W, H = 500, 420
-        popup = tkinter.Toplevel(self)
-        popup.title(f"Modifica / Aggiungi \u2014 {label}")
-        popup.configure(bg=BG)
-        popup.resizable(False, False)
-        popup.grab_set()
-        popup.update_idletasks()
-        x = (popup.winfo_screenwidth()  - W) // 2
-        y = (popup.winfo_screenheight() - H) // 2
-        popup.geometry(f"{W}x{H}+{x}+{y}")
 
-        Label(popup, text=f"Modifica / Aggiungi \u2014 {label}",
-              bg=BG, fg=TEXT_PRI, font=("Consolas", 11, "bold"), pady=12).pack()
-        Label(popup, text="Una chiave per riga. Righe vuote verranno ignorate.",
-              bg=BG, fg=TEXT_SEC, font=("Consolas", 9), justify="center").pack()
-        Frame(popup, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(8, 0))
-
-        btn_row = Frame(popup, bg=BG)
-        btn_row.pack(side="bottom", fill="x", padx=16, pady=12)
-        tkinter.Button(btn_row, text="Annulla", bg=BG_CARD, fg=TEXT_SEC,
-                       activebackground=BG_HOVER, activeforeground=TEXT_PRI,
-                       font=("Consolas", 10, "bold"), relief="flat",
-                       cursor="hand2", pady=6, padx=14, bd=0,
-                       command=popup.destroy).pack(side="right", padx=(6, 0))
-        btn_conferma = tkinter.Button(btn_row, text="\u2713  Conferma",
-                                      bg=ACCENT, fg="#ffffff",
-                                      activebackground="#3a7ee8",
-                                      activeforeground="#ffffff",
-                                      font=("Consolas", 10, "bold"),
-                                      relief="flat", cursor="hand2",
-                                      pady=6, padx=14, bd=0)
-        btn_conferma.pack(side="right")
-
-        feedback_var = tkinter.StringVar(value="")
-        Label(popup, textvariable=feedback_var, bg=BG, fg=WARNING,
-              font=("Consolas", 9), pady=4, justify="left",
-              anchor="w").pack(side="bottom", fill="x", padx=16)
-
-        txt_frame = Frame(popup, bg=BG_CARD)
-        txt_frame.pack(fill="both", expand=True, padx=16, pady=(8, 0))
-        vsb = ttk.Scrollbar(txt_frame, style="Dark.Vertical.TScrollbar")
-        vsb.pack(side="right", fill="y")
-        txt = tkinter.Text(txt_frame, bg=BG_INPUT, fg=TEXT_PRI,
-                           font=("Consolas", 10), relief="flat", bd=0,
-                           insertbackground=TEXT_PRI, wrap="none",
-                           padx=8, pady=6, yscrollcommand=vsb.set)
-        txt.pack(fill="both", expand=True)
-        vsb.config(command=txt.yview)
-        txt.focus_set()
-        txt.tag_configure("invalid", foreground=WARNING, background="#2a1f00")
-
-        existing = [tree.item(iid, "values")[0] for iid in tree.get_children()]
-        if existing:
-            txt.insert("1.0", "\n".join(existing))
-
-        import re as _re
         if filter_file == _PAY_FILTER_FILE_COMPOSITE:
-            _key_re = _re.compile(r'^R.+D\d{8}T(PAYMENT|REJECT|)$')
-            def _validate(k): return bool(_key_re.match(k)) and ' ' not in k
-            _fmt_hint = "Formato atteso: R{ref}D{YYYYMMDD}T{PAYMENT|REJECT|\"\"}"
+            _key_re   = _re.compile(r'^R.+D\d{8}T(PAYMENT|REJECT|)$')
+            _key_ok   = lambda k: bool(_key_re.match(k)) and ' ' not in k
+            _fmt_hint = 'Formato atteso: R{ref}D{YYYYMMDD}T{PAYMENT|REJECT|""}'
         else:
-            _key_re = _re.compile(r'^[A-Za-z0-9]+$')
-            def _validate(k): return bool(_key_re.match(k))
+            _key_re   = _re.compile(r'^[A-Za-z0-9]+$')
+            _key_ok   = lambda k: bool(_key_re.match(k))
             _fmt_hint = "Solo lettere e cifre (niente spazi, - _ o altri caratteri speciali)"
 
-        def _on_conferma():
-            raw = txt.get("1.0", "end").strip().splitlines()
-            txt.tag_remove("invalid", "1.0", "end")
-            feedback_var.set("")
-            stripped = [(i, line.strip()) for i, line in enumerate(raw) if line.strip()]
-            if not stripped:
-                feedback_var.set("\u26a0  Nessuna chiave trovata.")
-                return
-            invalid_lines = [(i, k) for i, k in stripped if not _validate(k)]
-            for i, _ in invalid_lines:
-                txt.tag_add("invalid", f"{i+1}.0", f"{i+1}.end")
-            if invalid_lines:
-                _n = len(invalid_lines)
-                _lbl = "chiave non valida" if _n == 1 else "chiavi non valide"
-                feedback_var.set(f"\u26a0  {_n} {_lbl}.\n{_fmt_hint}")
-                return
-            valid = [k for _, k in stripped]
-            tree.delete(*tree.get_children())
-            for v in valid:
-                tree.insert("", "end", values=(v,))
-            count_var.set(f"{len(valid)} chiavi.")
-            self._save_pay_filter_for(attr_tree, filter_file)
-            popup.destroy()
+        def _validate(raw):
+            stripped     = [(i, line.strip()) for i, line in enumerate(raw) if line.strip()]
+            invalid_nos  = [i + 1 for i, k in stripped if not _key_ok(k)]
+            valid        = [k for i, k in stripped if _key_ok(k)]
+            n = len(invalid_nos)
+            error_msg = (f"\u26a0  {n} {'chiave non valida' if n == 1 else 'chiavi non valide'}.\n{_fmt_hint}"
+                         if invalid_nos else "")
+            return valid, invalid_nos, error_msg
 
-        btn_conferma.config(command=_on_conferma)
+        self._paste_popup(
+            title=f"Modifica / Aggiungi \u2014 {label}",
+            subtitle="Una chiave per riga. Righe vuote verranno ignorate.",
+            tree=tree, count_var=count_var,
+            empty_warning="\u26a0  Nessuna chiave trovata.",
+            count_label_fn=lambda n: f"{n} chiavi.",
+            save_fn=lambda: self._save_pay_filter_for(attr_tree, filter_file),
+            validate_fn=_validate,
+        )
 
     def _pay_filter_clear_all_simple(self):
         self._pay_filter_clear_all_for(
@@ -8069,22 +8151,12 @@ class PaymentPlansFilter(_AppBase):
             self._save_pay_filter_for(attr_tree, filter_file)
 
     def _save_pay_filter_for(self, attr_tree, filter_file):
-        tree = getattr(self, attr_tree)
-        rows = [tree.item(iid, "values")[0] for iid in tree.get_children()
-                if tree.item(iid, "values")]
-        try:
-            filter_file.parent.mkdir(parents=True, exist_ok=True)
-            filter_file.write_text(("\n".join(rows) + "\n") if rows else "",
-                                   encoding="utf-8")
-            self._status_var.set(
-                f"\u2713 {filter_file.name} salvato ({len(rows)} chiavi).")
-        except Exception as e:
-            messagebox.showerror("Errore salvataggio filtro", str(e))
+        self._save_filter_to_file(getattr(self, attr_tree), filter_file)
 
     # ── Fields / config ───────────────────────────────────────────────────
 
     def _load_fields(self):
-        fk = _pp_get("PP_FILTER_KEY") or "agreement_id"
+        fk = _pp_get("PP_FILTER_KEY") or "plan_id"
         self._fk_var.set(_PP_FILTER_KEY_MAP_INV.get(fk, "Agreement ID"))
         self._update_input_label()
 
@@ -8112,6 +8184,18 @@ class PaymentPlansFilter(_AppBase):
         _write_env({"PAY_INPUT_FOLDER": dirs[0]})
         self._update_pay_input_label()
 
+    def _on_inv_dnd_drop(self, event):
+        import re
+        paths = [p[0] or p[1] for p in re.findall(r'\{([^}]+)\}|(\S+)', event.data)]
+        dirs = [p.strip() for p in paths if os.path.isdir(p.strip())]
+        if not dirs:
+            return
+        if len(dirs) > 1:
+            messagebox.showwarning("Cartella input", "Trascina una sola cartella.")
+            return
+        _write_env({"INV_INPUT_FOLDER": dirs[0]})
+        self._update_inv_input_label()
+
     def _update_input_label(self):
         val = _pp_get("PP_INPUT_FOLDER").strip()
         if val and len(val) > 55:
@@ -8123,13 +8207,7 @@ class PaymentPlansFilter(_AppBase):
 
     # ── Pipeline ─────────────────────────────────────────────────────────
 
-    def _on_done(self, success):
-        self._running = False
-        color = SUCCESS if success else ERROR
-        self._status_var.set(
-            "\u2713 Completato con successo." if success else "\u2717 Terminato con errori.")
-        self._btn.configure(fg=color, cursor="hand2")
-        self.after(3000, lambda: self._btn.configure(fg=ACCENT))
+    def _on_done_extra(self, success: bool):
         if success:
             try:
                 os.startfile(str(_HERE / "output" / "file filter" / "payment plans filter"))
@@ -8161,10 +8239,11 @@ class PaymentPlansFilter(_AppBase):
             "magheggio_c_in_u":  env.get("PP_MAGHEGGIO", "false").lower() == "true",
             "progress_interval": int(env.get("PP_PROGRESS_INTERVAL", "100")),
             "agreement_id_col":  int(env.get("PP_AGREEMENT_ID_COL", "0")),
+            "sap_plan_id_col":   int(env.get("PP_SAP_PLAN_ID_COL", "12")),
             "number_col":        int(env.get("PP_NUMBER_COL", "4")),
             "supply_code_col":   int(env.get("PP_SUPPLY_CODE_COL", "3")),
             "plan_type_id_col":  int(env.get("PP_PLAN_TYPE_ID_COL", "11")),
-            "filter_key":        env.get("PP_FILTER_KEY", "agreement_id"),
+            "filter_key":        env.get("PP_FILTER_KEY", "plan_id"),
         }
         threading.Thread(
             target=pp_run_pipeline,
@@ -8184,73 +8263,16 @@ class PaymentPlansFilter(_AppBase):
                                   fg=ACCENT if val else TEXT_SEC)
 
     def _build_pay_log_panel(self, parent, on_clear=None):
-        hdr = Frame(parent, bg=BG_CARD)
-        hdr.pack(fill="x")
-        Label(hdr, text="OUTPUT LOG", bg=BG_CARD, fg=TEXT_SEC,
-              font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
-        if on_clear:
-            icon = Label(hdr, text="🗑", bg=BG_CARD, fg=TEXT_SEC,
-                         font=("Consolas", 11), cursor="hand2", padx=10)
-            icon.bind("<Button-1>", lambda e: on_clear())
-            icon.bind("<Enter>",    lambda e: icon.configure(fg=ERROR))
-            icon.bind("<Leave>",    lambda e: icon.configure(fg=TEXT_SEC))
-            icon.pack(side="right")
-        Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=14)
-
-        lf = Frame(parent, bg=BG_CARD)
-        lf.pack(fill="both", expand=True, padx=4, pady=4)
-        log_vsb = ttk.Scrollbar(lf, style="Dark.Vertical.TScrollbar")
-        log_vsb.pack(side="right", fill="y")
-
-        def _log_scroll_set(first, last):
-            if float(first) <= 0.0 and float(last) >= 1.0:
-                if log_vsb.winfo_ismapped():
-                    log_vsb.pack_forget()
-            else:
-                if not log_vsb.winfo_ismapped():
-                    log_vsb.pack(side="right", fill="y")
-            log_vsb.set(first, last)
-        self._pay_log_box = Text(
-            lf, bg=BG_CARD, fg=TEXT_PRI, font=("Consolas", 10),
-            insertbackground=ACCENT, relief="flat", bd=0,
-            yscrollcommand=_log_scroll_set, state="disabled",
-            wrap="word", padx=10, pady=6, selectbackground=ACCENT2,
-        )
-        self._pay_log_box.pack(side="left", fill="both", expand=True)
-        log_vsb.config(command=self._pay_log_box.yview)
-
-        self._pay_log_box.tag_configure("ok",      foreground=SUCCESS)
-        self._pay_log_box.tag_configure("error",   foreground=ERROR)
-        self._pay_log_box.tag_configure("warn",    foreground=WARNING)
-        self._pay_log_box.tag_configure("info",    foreground=TEXT_SEC)
-        self._pay_log_box.tag_configure("section", foreground=ACCENT,
-                                    font=("Consolas", 10, "bold"))
+        self._build_log_panel(parent, on_clear=on_clear, log_attr="_pay_log_box")
 
     def _pay_clear_log(self):
-        self._pay_log_box.configure(state="normal")
-        self._pay_log_box.delete("1.0", "end")
-        self._pay_log_box.configure(state="disabled")
+        self._clear_log_for("_pay_log_box")
 
     def _pay_enqueue_log(self, message: str, level: str = "info"):
-        from datetime import datetime
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        stripped = message.lstrip("\n")
-        prefix   = message[: len(message) - len(stripped)]
-        if stripped:
-            self._pay_log_queue.put((f"{prefix}[{ts}] {stripped}", level))
-        else:
-            self._pay_log_queue.put((message, level))
+        self._enqueue_log_for(message, level, "_pay_log_queue")
 
     def _poll_pay_log(self):
-        try:
-            while True:
-                msg, level = self._pay_log_queue.get_nowait()
-                self._pay_log_box.configure(state="normal")
-                self._pay_log_box.insert("end", msg + "\n", level)
-                self._pay_log_box.see("end")
-                self._pay_log_box.configure(state="disabled")
-        except queue.Empty:
-            pass
+        self._poll_log_for("_pay_log_box", "_pay_log_queue")
         self.after(80, self._poll_pay_log)
 
     def _pay_on_done(self, success):
@@ -8308,6 +8330,85 @@ class PaymentPlansFilter(_AppBase):
             daemon=True,
         ).start()
 
+    # ── Invoice helpers ───────────────────────────────────────────────────
+
+    def _update_inv_input_label(self):
+        val = _inv_get("INV_INPUT_FOLDER").strip()
+        if val and len(val) > 55:
+            display = "…" + val[-52:]
+        else:
+            display = val if val else "—"
+        self._inv_input_lbl.configure(text=display,
+                                      fg=ACCENT if val else TEXT_SEC)
+
+    def _build_inv_log_panel(self, parent):
+        self._build_log_panel(parent, on_clear=self._inv_clear_log, log_attr="_inv_log_box")
+        self._inv_log_queue = queue.Queue()
+        self._inv_running   = False
+        self.after(80, self._poll_inv_log)
+
+    def _inv_clear_log(self):
+        self._clear_log_for("_inv_log_box")
+
+    def _inv_enqueue_log(self, message: str, level: str = "info"):
+        self._enqueue_log_for(message, level, "_inv_log_queue")
+
+    def _poll_inv_log(self):
+        self._poll_log_for("_inv_log_box", "_inv_log_queue")
+        self.after(80, self._poll_inv_log)
+
+    def _inv_on_done(self, success):
+        self._inv_running = False
+        color = SUCCESS if success else ERROR
+        self._status_var.set(
+            "✓ Completato con successo." if success else "✗ Terminato con errori.")
+        self._inv_btn.configure(fg=color, cursor="hand2")
+        self.after(3000, lambda: self._inv_btn.configure(fg=ACCENT))
+        if success:
+            try:
+                os.startfile(str(_HERE / "output" / "file filter" / "invoice"))
+            except Exception:
+                pass
+
+    def _inv_start(self):
+        if self._inv_running:
+            return
+        env = _read_env_raw()
+        input_folder = env.get("INV_INPUT_FOLDER", "").strip()
+        if not input_folder:
+            self._inv_enqueue_log("[ERRORE] Seleziona la cartella di input prima di avviare.", "error")
+            return
+        _folder = Path(input_folder)
+        if not _folder.is_dir():
+            self._inv_enqueue_log(f"[ERRORE] Cartella non trovata: {input_folder}", "error")
+            return
+        import re as _re_chk
+        _INV_CHK = _re_chk.compile(
+            r'^(KF|KR|KM|KK)_[EG]_\d{14}_\d{8}\.csv$', _re_chk.IGNORECASE)
+        if not any(_INV_CHK.match(f.name) for f in _folder.glob("*.csv")):
+            self._inv_enqueue_log(
+                "[ERRORE] La cartella non contiene file Invoice validi "
+                "(KF/KR/KM/KK_E/G_NNNNNNNNNNNNNN_YYYYMMDD.csv).", "error")
+            return
+        self._inv_running = True
+        self._inv_btn.configure(fg=TEXT_SEC, cursor="arrow")
+        self._status_var.set("In esecuzione...")
+        cfg = {
+            "input_folder":      input_folder,
+            "output_subfolder":  env.get("INV_OUTPUT_SUBFOLDER", "output"),
+            "zip_filename":      env.get("INV_ZIP_FILENAME", "invoice.zip"),
+            "filter_mode":       env.get("INV_FILTER_MODE", "identifier"),
+            "col_identifier":    int(env.get("INV_COL_IDENTIFIER", "0")),
+            "col_prm":           int(env.get("INV_COL_PRM", "9")),
+            "col_account":       int(env.get("INV_COL_ACCOUNT", "10")),
+            "col_amount":        int(env.get("INV_COL_AMOUNT", "13")),
+            "col_type":          int(env.get("INV_COL_TYPE", "2")),
+        }
+        threading.Thread(
+            target=inv_run_pipeline,
+            args=(cfg, self._inv_enqueue_log, self._inv_on_done),
+            daemon=True,
+        ).start()
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -10230,15 +10331,11 @@ class InvoiceWriter(_AppBase):
         self._log_queue = queue.Queue()
         self._running   = False
         self._build_ui()
-        self._load_identifier_into_table()
+        self._load_invoice_input()
         self._poll_log()
 
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-                                  font=("Consolas", 9), anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
         self._build_notebook([
             ("  ▶  Pipeline  ",    self._build_pipeline_tab),
             ("  📋  Data Input  ", self._build_data_input_tab),
@@ -10334,51 +10431,8 @@ class InvoiceWriter(_AppBase):
     # ── Identifier ────────────────────────────────────────────────────────
 
     def _identifier_paste_popup(self):
-        """Popup per modificare la lista invoice: IDENTIFIER;IMPORT_SUPPLIER_BILL_ID;AGREEMENT_ID."""
-        popup = tkinter.Toplevel(self)
-        popup.title("Modifica / Aggiungi righe")
-        popup.configure(bg=BG)
-        popup.grab_set()
-        popup.update_idletasks()
-        W, H = 700, 520
-        x = (popup.winfo_screenwidth()  - W) // 2
-        y = (popup.winfo_screenheight() - H) // 2
-        popup.geometry(f"{W}x{H}+{x}+{y}")
-
-        Label(popup,
-              text="Formato: IDENTIFIER ; IMPORT_SUPPLIER_BILL_ID ; AGREEMENT_ID\n"
-                   "IDENTIFIER obbligatorio (EB.../GB...) — esattamente uno tra IMPORT_SUPPLIER_BILL_ID e AGREEMENT_ID.",
-              bg=BG, fg=TEXT_SEC, font=("Consolas", 9), justify="left",
-              anchor="w", pady=8).pack(fill="x", padx=16)
-        Frame(popup, bg=BORDER, height=1).pack(fill="x", padx=16)
-
-        txt = tkinter.Text(popup, bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
-                           relief="flat", font=("Consolas", 10), wrap="none",
-                           padx=8, pady=8, undo=True)
-        txt.pack(fill="both", expand=True, padx=16, pady=10)
-        txt.tag_configure("invalid", foreground=WARNING, background="#2a1f00")
-
-        for iid in self._id_tree.get_children():
-            vals = self._id_tree.item(iid, "values")
-            if vals:
-                txt.insert("end", ";".join(vals) + "\n")
-        txt.focus_set()
-
-        feedback_var = tkinter.StringVar(value="")
-        feedback_lbl = Label(popup, textvariable=feedback_var, bg=BG, fg=TEXT_SEC,
-                             font=("Consolas", 9), anchor="w")
-        feedback_lbl.pack(fill="x", padx=16)
-
-        btn_row = Frame(popup, bg=BG)
-        btn_row.pack(fill="x", padx=16, pady=(0, 12))
-
-        def _save():
-            raw = txt.get("1.0", tkinter.END).strip().splitlines()
-            txt.tag_remove("invalid", "1.0", "end")
-            valid_rows = []
-            invalid_lines = []
-            seen_identifiers: dict = {}  # identifier -> prima riga (1-based)
-
+        def _validate(raw):
+            valid_rows, invalid_nos, seen = [], [], {}
             for i, line in enumerate(raw):
                 line_s = line.strip()
                 if not line_s:
@@ -10388,68 +10442,45 @@ class InvoiceWriter(_AppBase):
                 sap_plan   = parts[1] if len(parts) >= 2 else ""
                 agreement  = parts[2] if len(parts) >= 3 else ""
                 line_no = i + 1
-
-                ok = True
-                if not identifier:
-                    ok = False
-                elif not identifier.upper().startswith(("EB", "GB")):
-                    ok = False
-                elif not sap_plan and not agreement:
-                    ok = False  # nessuno dei due
-                elif sap_plan and agreement:
-                    ok = False  # entrambi presenti: solo uno è ammesso
-
+                ok = (identifier
+                      and identifier.upper().startswith(("EB", "GB"))
+                      and bool(sap_plan) != bool(agreement))
                 if not ok:
-                    invalid_lines.append(line_no)
-                    txt.tag_add("invalid", f"{line_no}.0", f"{line_no}.end")
+                    invalid_nos.append(line_no)
                     continue
-
-                # Controlla duplicato
-                if identifier in seen_identifiers:
-                    # Evidenzia la riga corrente e la prima occorrenza
-                    txt.tag_add("invalid", f"{line_no}.0", f"{line_no}.end")
-                    if line_no not in invalid_lines:
-                        invalid_lines.append(line_no)
-                    first = seen_identifiers[identifier]
-                    txt.tag_add("invalid", f"{first}.0", f"{first}.end")
-                    if first not in invalid_lines:
-                        invalid_lines.append(first)
-                    # Rimuovi dalla valid_rows la prima occorrenza
+                if identifier in seen:
+                    invalid_nos.append(line_no)
+                    first = seen[identifier]
+                    if first not in invalid_nos:
+                        invalid_nos.append(first)
                     valid_rows = [(id_, s, a) for id_, s, a in valid_rows if id_ != identifier]
                 else:
-                    seen_identifiers[identifier] = line_no
+                    seen[identifier] = line_no
                     valid_rows.append((identifier, sap_plan, agreement))
+            error_msg = (
+                f"⚠  {len(invalid_nos)} riga/e non valida/e — correggi e riprova. "
+                "(EB/GB, nessun duplicato, esattamente uno tra IMPORT_SUPPLIER_BILL_ID e AGREEMENT_ID)"
+                if invalid_nos else ""
+            )
+            return valid_rows, invalid_nos, error_msg
 
-            if not valid_rows and not invalid_lines:
-                feedback_var.set("⚠  Nessuna riga trovata.")
-                feedback_lbl.config(fg=WARNING)
-                return
-            if invalid_lines:
-                feedback_var.set(
-                    f"⚠  {len(invalid_lines)} riga/e non valida/e evidenziate in giallo — "
-                    "correggi e riprova.  "
-                    "(IDENTIFIER: prefisso EB/GB, nessun duplicato, "
-                    "esattamente uno tra IMPORT_SUPPLIER_BILL_ID e AGREEMENT_ID)")
-                feedback_lbl.config(fg=WARNING)
-                return
-
-            self._id_tree.delete(*self._id_tree.get_children())
-            for r in valid_rows:
-                self._id_tree.insert("", "end", values=r)
-            self._id_count_var.set(f"{len(valid_rows)} righe.")
-            self._save_identifier_input()
-            popup.destroy()
-
-        tkinter.Button(btn_row, text="✔  Salva", command=_save,
-                       bg=BG_CARD, fg=ACCENT, font=("Consolas", 10, "bold"),
-                       relief="flat", cursor="hand2", padx=10, pady=4,
-                       activebackground=BG_HOVER, activeforeground=TEXT_PRI,
-                       bd=0).pack(side="left", padx=(0, 8))
-        tkinter.Button(btn_row, text="✕  Annulla", command=popup.destroy,
-                       bg=BG_CARD, fg=TEXT_SEC, font=("Consolas", 10, "bold"),
-                       relief="flat", cursor="hand2", padx=10, pady=4,
-                       activebackground=BG_HOVER, activeforeground=TEXT_PRI,
-                       bd=0).pack(side="left")
+        self._paste_popup(
+            title="Modifica / Aggiungi righe",
+            subtitle="Formato: IDENTIFIER ; IMPORT_SUPPLIER_BILL_ID ; AGREEMENT_ID\n"
+                     "IDENTIFIER obbligatorio (EB.../GB...) — esattamente uno tra i due campi.",
+            tree=self._id_tree,
+            count_var=self._id_count_var,
+            empty_warning="⚠  Nessuna riga trovata.",
+            count_label_fn=lambda n: f"{n} righe.",
+            save_fn=self._save_identifier_input,
+            undo=True,
+            validate_fn=_validate,
+            load_existing_fn=lambda t: "\n".join(
+                ";".join(t.item(iid, "values")) for iid in t.get_children()
+                if t.item(iid, "values")
+            ),
+            insert_fn=lambda t, r: t.insert("", "end", values=r),
+        )
 
     def _identifier_clear_all(self):
         if not self._id_tree.get_children():
@@ -10474,7 +10505,7 @@ class InvoiceWriter(_AppBase):
         except Exception as e:
             messagebox.showerror("Errore salvataggio", str(e))
 
-    def _load_identifier_into_table(self):
+    def _load_invoice_input(self):
         for row in self._id_tree.get_children():
             self._id_tree.delete(row)
         if not _IW_INPUT_FILE.exists():
@@ -10549,15 +10580,14 @@ class CsvBlankHeaderRemover(_AppBase):
         self._files_data  = []
         self._build_ui()
         self._load_into_list()
-        self._update_btn_state()
+        self._update_btn_state(self._files_data)
         self._poll_log()
 
+    @property
+    def _btn_data(self): return self._files_data
+
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
-        self._status_lbl = Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-                                  font=("Consolas", 9), anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
 
         body = Frame(self, bg=BG, highlightthickness=1, highlightbackground=BORDER)
         body.pack(fill="both", expand=True, padx=24, pady=(12, 0))
@@ -10575,43 +10605,17 @@ class CsvBlankHeaderRemover(_AppBase):
         Label(hdr, text="FILE", bg=BG_CARD, fg=TEXT_SEC,
               font=("Consolas", 9, "bold"), pady=10, padx=14).pack(side="left")
 
-        def _icon_btn(symbol, command, color=ACCENT, tip=""):
-            lbl = Label(hdr, text=symbol, bg=BG_CARD, fg=color,
-                        font=("Consolas", 14), cursor="hand2", padx=10, pady=6)
-            lbl.bind("<Button-1>", lambda e: command())
-            lbl.bind("<Enter>",    lambda e: (lbl.configure(bg=BG_HOVER),
-                                              self._status_var.set(tip) if tip else None))
-            lbl.bind("<Leave>",    lambda e: (lbl.configure(bg=BG_CARD),
-                                              self._status_var.set("Pronto.")))
-            return lbl
-
-        _icon_btn("🗑", self._remove_all,    ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
-        self._btn = _icon_btn("▶", self._start, ACCENT, "Avvia rimozione header")
+        self._make_icon_btn(hdr, "🗑", self._remove_all,    ERROR,   "Rimuovi tutto").pack(side="right", padx=(0, 4))
+        self._btn = self._make_icon_btn(hdr, "▶", self._start, ACCENT, "Avvia rimozione header")
         self._btn.pack(side="right", padx=(0, 8))
         Frame(top, bg=BORDER, height=1).pack(fill="x", padx=14)
 
         # ── Drop zone drag & drop file CSV/TXT ───────────────────────────────
         dz_body = Frame(top, bg=BG_CARD)
         dz_body.pack(fill="x", padx=8, pady=(6, 2))
-        self._cbr_drop_zone = Label(
-            dz_body,
-            text="\U0001f4c2  Trascina qui uno o più file (.csv, .txt)",
-            bg=BG_INPUT, fg=TEXT_SEC, font=("Consolas", 9),
-            pady=10, cursor="hand2",
-            highlightthickness=1, highlightbackground=BORDER,
-        )
-        self._cbr_drop_zone.pack(fill="x")
-        self._cbr_drop_zone.bind("<Button-1>", lambda e: self._browse_files())
-        self._cbr_drop_zone.bind("<Enter>",
-            lambda e: self._cbr_drop_zone.configure(highlightbackground=ACCENT))
-        self._cbr_drop_zone.bind("<Leave>",
-            lambda e: self._cbr_drop_zone.configure(highlightbackground=BORDER))
-        if _HAS_DND:
-            try:
-                self._cbr_drop_zone.drop_target_register(_DND_FILES)
-                self._cbr_drop_zone.dnd_bind("<<Drop>>", self._on_cbr_dnd_drop)
-            except Exception:
-                pass
+        self._build_drop_zone(dz_body, "_cbr_drop_zone",
+                              "\U0001f4c2  Trascina qui uno o più file (.csv, .txt)",
+                              self._browse_files, self._on_cbr_dnd_drop)
 
         # Canvas scrollabile
         canvas_frame = Frame(top, bg=BG_CARD)
@@ -10645,45 +10649,15 @@ class CsvBlankHeaderRemover(_AppBase):
         paned.add(bottom, minsize=100, stretch="always")
 
     def _cbr_update_scroll(self, _e=None):
-        self._cbr_canvas.update_idletasks()
-        content_h = self._cbr_inner.winfo_reqheight()
-        canvas_h  = self._cbr_canvas.winfo_height()
-        if content_h > canvas_h:
-            if not self._cbr_vsb.winfo_ismapped():
-                self._cbr_vsb.pack(side="right", fill="y")
-            self._cbr_canvas.configure(scrollregion=(0, 0, 0, content_h))
-        else:
-            if self._cbr_vsb.winfo_ismapped():
-                self._cbr_vsb.pack_forget()
-            self._cbr_canvas.configure(scrollregion=(0, 0, 0, canvas_h))
-            self._cbr_canvas.yview_moveto(0)
+        self._update_scroll(self._cbr_canvas, self._cbr_inner, self._cbr_vsb)
 
     # ── Lista file ────────────────────────────────────────────────────────
 
     def _load_into_list(self):
-        raw = _CBR_TXT.read_text(encoding="utf-8") if _CBR_TXT.exists() else ""
-        self._files_data = [l.strip() for l in raw.splitlines() if l.strip()]
-        self._redraw_files()
+        self._load_list_from_file(_CBR_TXT, "_files_data", self._redraw_files)
 
     def _redraw_files(self):
-        for w in self._cbr_inner.winfo_children():
-            w.destroy()
-        for path in self._files_data:
-            row = Frame(self._cbr_inner, bg=BG_CARD)
-            row.pack(fill="x", padx=6, pady=1)
-            x_lbl = Label(row, text="✕", bg=BG_CARD, fg=ERROR,
-                          font=("Consolas", 10, "bold"), cursor="hand2",
-                          padx=8, pady=4)
-            x_lbl.pack(side="left")
-            x_lbl.bind("<Button-1>", lambda e, p=path: self._remove_by_path(p))
-            x_lbl.bind("<Enter>",    lambda e, l=x_lbl: l.configure(bg=BG_HOVER))
-            x_lbl.bind("<Leave>",    lambda e, l=x_lbl: l.configure(bg=BG_CARD))
-            Label(row, text=path, bg=BG_CARD, fg=TEXT_PRI,
-                  font=("Consolas", 10), anchor="w", pady=4).pack(
-                  side="left", fill="x", expand=True)
-            Frame(self._cbr_inner, bg=BORDER, height=1).pack(fill="x", padx=6)
-        self._update_btn_state()
-        self._cbr_update_scroll()
+        self._render_rows(self._cbr_inner, self._files_data, self._remove_by_path, self._cbr_update_scroll)
 
     def _remove_by_path(self, path):
         if path in self._files_data:
@@ -10699,13 +10673,7 @@ class CsvBlankHeaderRemover(_AppBase):
         self._save_and_reload()
 
     def _save_and_reload(self):
-        try:
-            _CBR_TXT.parent.mkdir(parents=True, exist_ok=True)
-            _CBR_TXT.write_text("\n".join(self._files_data), encoding="utf-8")
-            self._status_var.set("✓ files.txt salvato.")
-        except Exception as e:
-            messagebox.showerror("Errore salvataggio", str(e))
-        self._redraw_files()
+        super()._save_and_reload(_CBR_TXT, "\n".join(self._files_data), self._redraw_files)
 
     def _browse_files(self):
         paths = filedialog.askopenfilenames(
@@ -10734,18 +10702,7 @@ class CsvBlankHeaderRemover(_AppBase):
             self._files_data.extend(added)
             self._save_and_reload()
 
-    def _update_btn_state(self):
-        has = bool(self._files_data)
-        self._btn.configure(fg=ACCENT if has else TEXT_SEC,
-                            cursor="hand2" if has else "arrow")
-
     # ── Pipeline ──────────────────────────────────────────────────────────
-
-    def _on_done(self, success: bool):
-        self._running = False
-        self._status_var.set("✓ Completato." if success else "✗ Terminato con errori.")
-        self._btn.configure(fg=SUCCESS if success else ERROR, cursor="hand2")
-        self.after(3000, self._update_btn_state)
 
     def _start(self):
         if self._running or not self._files_data:
@@ -11472,12 +11429,7 @@ class JiraTicketCreator(_AppBase):
     # ── Costruzione UI ───────────────────────────────────────────────────
 
     def _build_ui(self):
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=12, side="bottom")
-        self._status_lbl = Label(self, textvariable=self._status_var,
-                                 bg=BG, fg=TEXT_SEC, font=("Consolas", 9),
-                                 anchor="w", pady=5)
-        self._status_lbl.pack(fill="x", padx=12, side="bottom")
+        self._build_status_bar()
 
         body = tkinter.Frame(self, bg=BG)
         body.pack(fill="both", expand=True, padx=(10, 19), pady=(4, 4))
@@ -13075,6 +13027,9 @@ class HubFilterUpdater(_AppBase):
         self._load_input_into_table()
         self._poll_log()
 
+    @property
+    def _btn_data(self): return True
+
     def _build_ui(self):
         style = ttk.Style()
         style.theme_use("clam")
@@ -13100,10 +13055,7 @@ class HubFilterUpdater(_AppBase):
         nb.add(tab_input, text="  📋  Data Input  ")
         self._build_input_tab(tab_input)
 
-        self._status_var = tkinter.StringVar(value="Pronto.")
-        Label(self, textvariable=self._status_var, bg=BG, fg=TEXT_SEC,
-              font=("Consolas", 9), anchor="w", pady=5).pack(fill="x", padx=24, side="bottom")
-        Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, side="bottom")
+        self._build_status_bar()
 
     def _build_pipeline_tab(self, parent):
         body = Frame(parent, bg=BG)
@@ -13206,24 +13158,7 @@ class HubFilterUpdater(_AppBase):
     def _load_input_into_table(self):
         if not hasattr(self, "_input_tree"):
             return
-        for row in self._input_tree.get_children():
-            self._input_tree.delete(row)
-        if not UHF_INPUT_FILE.exists():
-            self._input_count_var.set("File non trovato — verrà creato al salvataggio.")
-            return
-        lines = UHF_INPUT_FILE.read_text(encoding="utf-8").strip().splitlines()
-        count = 0
-        for line in lines:
-            line = line.strip()
-            if not line or line.lower().startswith("prm"):
-                continue
-            parts = line.split(";")
-            if len(parts) == 2:
-                self._input_tree.insert("", "end", values=(parts[0].strip(), parts[1].strip()))
-                count += 1
-            else:
-                self._input_tree.insert("", "end", values=(line, ""))
-        self._input_count_var.set(f"{count} righe caricate.")
+        self._load_prm_input_from_file(UHF_INPUT_FILE)
 
     def _save_input(self):
         rows = []
@@ -13246,15 +13181,9 @@ class HubFilterUpdater(_AppBase):
         self._input_count_var.set(f"{n} righe.")
 
     def _input_paste_popup(self):
-        self._paste_popup(
-            title="Modifica / Aggiungi dati",
-            subtitle=("Modifica, aggiungi o cancella righe. Formato: PRM;KrakenAccount\n"
-                      "Le righe non valide verranno evidenziate in arancione."),
+        self._prm_account_paste_popup(
             tree=self._input_tree, count_var=self._input_count_var,
-            empty_warning="⚠  Nessuna riga trovata.",
-            count_label_fn=lambda n: f"{n} righe.",
             save_fn=self._save_input,
-            two_column=True, W=560, H=460,
         )
 
     def _input_clear_all(self):
@@ -13304,15 +13233,10 @@ class HubFilterUpdater(_AppBase):
         entry.bind("<FocusOut>", _commit)
         entry.bind("<Escape>",  lambda e: entry.destroy())
 
-    def _on_done(self, success: bool):
-        self._running = False
+    def _on_done_extra(self, success: bool):
         self._stop_requested = False
         self._cluster_var.set("")
         self._cluster_entry.configure(state="normal")
-        color = SUCCESS if success else ERROR
-        self._status_var.set("✓ Completato." if success else "✗ Errore.")
-        self._btn.configure(fg=color, cursor="hand2")
-        self.after(3000, lambda: self._btn.configure(fg=ACCENT))
 
     def _clear_log(self):
         self._log_box.configure(state="normal")
@@ -13653,7 +13577,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         _APPS[6]["class"] = FolderCleaner
         _APPS[7]["class"] = FolderMover
         _APPS[8]["class"] = ZipFolder
-        _APPS[9]["class"] = PaymentPlansFilter
+        _APPS[9]["class"] = FileFilter
         _APPS[10]["class"] = JiraTicketCreator
         _APPS[11]["class"] = CsvBlankHeaderRemover
         _APPS[12]["class"] = InvoiceWriter
@@ -14443,6 +14367,8 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
 
 
     def _build_about_panel(self, parent):
+        import re as _re
+        _AB_FILE = _HERE / "ABOUT.md"
         canvas, inner = self._make_scrollable_canvas(parent)
 
         hdr = tkinter.Frame(inner, bg=BG)
@@ -14463,216 +14389,69 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
 
         tkinter.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=40, pady=(16, 0))
 
-        APPS_SECTIONS = [
-            ("🔄  HUB Prod Sync", [
-                ("Cosa fa",
-                 "Sincronizza le tabelle dal database HUB Produzione verso Integration o Recette "
-                 "tramite tunnel SSH. Esegue TRUNCATE CASCADE + trasferimento bulk con cursore "
-                 "server-side a batch da 10.000 righe — senza caricare l'intera tabella in memoria."),
-                ("Tabelle sincronizzabili",
-                 "Customer, Agreement, Sap filter contract, Identifier version map, "
-                 "Sap old plan map, Old agreement id map. "
-                 "Ogni tabella si abilita individualmente tramite le checkbox nel pannello sinistro."),
-                ("Stop",
-                 "Il bottone ■ Stop interrompe l'operazione al termine del batch corrente, "
-                 "esegue rollback e chiude tutte le connessioni in modo pulito."),
-            ]),
-            ("🐙  Kraken Data Extractor", [
-                ("Modalità operative",
-                 "PRM — Estrae dati a partire da coppie PRM / Kraken Account fornite manualmente.\n\n"
-                 "Identifier — Parte da una lista di document identifier. Recupera le invoice su Kraken, "
-                 "estrae automaticamente le coppie PRM/Kraken Account e poi esegue i flussi secondari.\n\n"
-                 "Reference — Parte da una lista di payment reference. Recupera i pagamenti, "
-                 "estrae le coppie PRM/Kraken Account e poi esegue i flussi secondari."),
-                ("Architettura connessioni",
-                 "Kraken DB — Connessione diretta PostgreSQL al database sorgente (replica analytics).\n"
-                 "SSH Tunnel — Tunnel sicuro verso Integration o Recette.\n"
-                 "HUB DB — Lettura delle query SQL dalla tabella hub_config_query_kraken."),
-                ("File di input",
-                 "PRM: input/kraken data extractor/data_input.txt\n"
-                 "Identifier: input/kraken data extractor/data_input_identifier.txt\n"
-                 "Reference: input/kraken data extractor/data_input_reference.txt"),
-            ]),
-            ("🔬  Kraken Full Data Extractor", [
-                ("Cosa fa",
-                 "Estrae dati full (senza filtri) da Kraken PROD e li carica direttamente su HUB PROD "
-                 "nelle tabelle j_kraken_*. Per ogni flow: TRUNCATE + estrazione Kraken + bulk insert "
-                 "su HUB con cursore server-side a batch da 10.000 righe."),
-                ("Tabelle estratte",
-                 "Customer → j_kraken_customer\n"
-                 "Agreement → j_kraken_agreement\n"
-                 "Payment Plan (ELEC + GAS) → j_kraken_payment_plan\n"
-                 "Renewal → j_kraken_renewal\n"
-                 "Invoice (ELEC + GAS) → j_kraken_invoice\n"
-                 "Payment (ELEC + GAS) → j_kraken_payments"),
-                ("Tempi stimati",
-                 "Dopo ogni esecuzione i tempi per flow vengono salvati nel .env (chiavi ADE_TIME_*) "
-                 "e mostrati accanto alle checkbox come previsione per i run futuri. "
-                 "Al passaggio del mouse appare un tooltip esplicativo."),
-                ("Connessioni",
-                 "Usa le stesse credenziali HUB e Kraken già configurate. "
-                 "Le connessioni hanno TCP keepalive abilitato (idle 60s) per reggere "
-                 "query che durano oltre un'ora. Reconnect automatico se la connessione HUB "
-                 "cade durante il fetch. Il commento di ogni tabella viene aggiornato "
-                 "con la data dell'ultima estrazione riuscita."),
-            ]),
-            ("⚡  Delta Recovery", [
-                ("Cosa fa",
-                 "Si connette al database HUB Produzione, estrae i pagamenti recuperabili "
-                 "da ztemp_pp_delta_payment_cluster (sub_cluster = SCARTO HUB) che hanno un match "
-                 "in payment_plans, li cerca nelle tabelle kraken ELE e GAS e inserisce i risultati "
-                 "in test_payments / test_payments_gas su Recette o Integration via tunnel SSH."),
-                ("Modalità operative",
-                 "NO_PAYMENT_PLAN_FOUND — Pagamenti senza piano.\n\n"
-                 "MULTIPLE_PAYMENT_PLAN_FOUND_FOR_PAYMENT_DATE — Pagamenti con più piani, risolti per conteggio.\n\n"
-                 "NO_PAYMENT_PLAN_FOUND_FOR_PAYMENT_DATE — Pagamenti senza piano per la data specifica."),
-                ("Tab Query",
-                 "Le query SQL per ogni modalità sono modificabili e validabili direttamente dall'interfaccia. "
-                 "Le modifiche vengono salvate nei file .sql in input/delta recovery/queries/. "
-                 "Se il file non esiste viene usato il fallback hardcoded."),
-            ]),
-            ("🧹  Folder Cleaner", [
-                ("Cosa fa",
-                 "Elimina tutti i file e le sottocartelle dentro le cartelle configurate "
-                 "(non le cartelle stesse). La cancellazione dei file avviene in parallelo, "
-                 "le sottocartelle in sequenza con shutil.rmtree."),
-                ("Configurazione",
-                 "Le cartelle da pulire sono elencate in input/folder cleaner/folders.txt. "
-                 "Si aggiungono tramite il bottone + e si rimuovono con la ✕ su ogni riga."),
-            ]),
-            ("📦  Folder Mover", [
-                ("Cosa fa",
-                 "Copia tutti i file da una cartella sorgente a una cartella destinazione. "
-                 "La destinazione viene svuotata prima della copia. La copia è interrompibile."),
-                ("Configurazione",
-                 "Le coppie sorgente → destinazione si configurano in input/folder mover/folders.txt. "
-                 "Si aggiungono tramite il bottone + selezionando prima la sorgente poi la destinazione. "
-                 "Sorgente e destinazione identiche vengono rifiutate. "
-                 "La ✕ su ogni riga rimuove quella coppia specifica."),
-            ]),
-            ("🗜  ZIP Folder", [
-                ("Cosa fa",
-                 "Comprime le cartelle selezionate in file ZIP individuali usando la compressione DEFLATE. "
-                 "Il nome del file ZIP corrisponde al nome della cartella sorgente. "
-                 "L'output viene salvato in output/zip folder/."),
-                ("Filtro",
-                 "È possibile filtrare i file da includere nello ZIP per sottostringa nel nome. "
-                 "Se il filtro è disabilitato, tutti i file vengono compressi."),
-                ("Configurazione",
-                 "Le cartelle da comprimere sono elencate in input/zip folder/folders.txt. "
-                 "La cartella di output è configurabile dal campo Output nel pannello."),
-            ]),
-            ("💳  File Filter", [
-                ("Cosa fa",
-                 "Filtra file CSV (pattern K[EG]_PP_*.csv) mantenendo solo le righe che corrispondono "
-                 "agli ID caricati nei file di filtro. Produce i file filtrati in una sottocartella "
-                 "e li comprime in un file ZIP salvato in output/payment plans filter/."),
-                ("Chiavi di filtro",
-                 "Agreement ID — filtra per ID accordo.\n"
-                 "Prm + Kraken Account — filtra per coppia prm;A-xxxxxxxx.\n"
-                 "Agreement ID + Plan Type — filtra per coppia id;M|C|R|U."),
-                ("File di filtro",
-                 "I file di filtro si trovano in input/payment plans filter/. "
-                 "Si modificano dalla tab Filtro con validazione automatica per tipo. "
-                 "Ogni tab corrisponde a una chiave di filtro diversa."),
-                ("Trasforma file",
-                 "L'opzione 'Trasforma file ;C; → ;U;' sostituisce il valore C con U "
-                 "nelle righe mantenute, utile per la bonifica dei payment plan."),
-            ]),
-            ("📄  CSV Header Remover", [
-                ("Cosa fa",
-                 "Rimuove la prima riga da file CSV e TXT, ma solo se è completamente vuota "
-                 "(contiene esclusivamente caratteri di a capo: \\n, \\r\\n o \\r). "
-                 "Se la prima riga contiene qualsiasi contenuto, il file viene saltato."),
-                ("Output",
-                 "I file processati vengono salvati in output/csv blank header remover/ "
-                 "con il suffisso _no_head aggiunto al nome originale. "
-                 "File molto grandi vengono gestiti a chunk da 64 MB senza caricarli in memoria."),
-                ("Configurazione",
-                 "I file da processare si aggiungono tramite il bottone + e si rimuovono "
-                 "con la ✕ su ogni riga. La lista persiste in input/csv blank header remover/files.txt."),
-            ]),
-            ("🧾  Invoice Writer", [
-                ("Cosa fa",
-                 "Replica il flusso Java InvoiceService: legge le invoice direttamente da "
-                 "Kraken (ELEC e GAS), filtrate per la lista di document identifier inserita "
-                 "nella tab Data Input, le valida e genera i CSV SAP + ZIP in "
-                 "output/invoice writer/."),
-                ("Data Input",
-                 "File: input/invoice writer/data_input.csv\n"
-                 "Colonne: IDENTIFIER ; IMPORT_SUPPLIER_BILL_ID ; AGREEMENT_ID\n"
-                 "IDENTIFIER obbligatorio (prefisso EB/GB), esattamente uno tra i due campi piano. "
-                 "Validazione con evidenziazione in giallo delle righe non valide."),
-                ("Database",
-                 "Usa le credenziali HUB e Kraken già configurate. Nessuna configurazione separata."),
-                ("Avvio",
-                 "Esegue il flusso completo per ELEC e GAS in sequenza con log in tempo reale."),
-            ]),
-            ("🎫  Jira Ticket Creator", [
-                ("Cosa fa",
-                 "Crea ticket Jira direttamente dall'interfaccia. Supporta autenticazione Basic, "
-                 "formattazione (bold, italic, link, liste), allegati drag & drop, template e "
-                 "importazione da ticket esistente tramite chiave o URL."),
-                ("Ambiente",
-                 "Il toggle Prod / Chopin in alto a destra seleziona l'ambiente di destinazione. "
-                 "Influenza il percorso nel file .cfg (PE1 per Prod, CE1 per Chopin)."),
-                ("Assegnatario",
-                 "Il bottone Valida verifica l'esistenza dell'utente su Jira tramite API "
-                 "(/rest/api/2/user/search) prima di creare il ticket. "
-                 "Se l'utente non esiste il flusso viene bloccato con un messaggio nel log."),
-                ("File .cfg",
-                 "La checkbox 'Crea file .cfg' prepopola i campi con valori fissi, li blocca in "
-                 "sola lettura e abilita il bottone 'Preview .cfg'. "
-                 "Il .cfg viene generato, allegato al ticket e salvato in output/jira ticket/cfg/. "
-                 "Togliendo la spunta i campi tornano modificabili e vuoti."),
-                ("Credenziali",
-                 "JIRA_URL, JIRA_USERNAME, JIRA_PASSWORD salvati in config/.env. "
-                 "Modificabili anche da Impostazioni → Jira."),
-            ]),
-            ("⚙  Configurazione", [
-                ("Impostazioni",
-                 "Tutte le credenziali e le impostazioni sono salvate in config/.env. "
-                 "Si modificano dalla sezione Impostazioni nella sidebar in basso a sinistra. "
-                 "I valori vengono salvati automaticamente al cambio di campo."),
-                ("Ambiente DB",
-                 "Il toggle Integration / Recette in alto a destra è visibile solo nelle sezioni "
-                 "HUB Prod Sync, Kraken Data Extractor e Delta Recovery. "
-                 "La scelta viene ricordata al riavvio."),
-                ("Dipendenze",
-                 "psycopg2-binary, python-dotenv, paramiko, sshtunnel, requests, tkinterdnd2. "
-                 "Installate automaticamente alla prima esecuzione tramite pip. "
-                 "La splash screen mostra l'avanzamento del caricamento ad ogni avvio."),
-                ("Keep-alive",
-                 "All'avvio il tool imposta SetThreadExecutionState su Windows per impedire "
-                 "sleep, screensaver e spegnimento display. Viene rilasciato alla chiusura."),
-            ]),
-        ]
-        text_labels = []
-        for app_title, sections in APPS_SECTIONS:
-            card = tkinter.Frame(inner, bg=BG_CARD, bd=0,
-                                 highlightthickness=1, highlightbackground=BORDER)
-            card.pack(fill="x", padx=40, pady=(16, 0))
-            tkinter.Label(card, text=app_title, bg=BG_CARD, fg=TEXT_PRI,
-                          font=("Consolas", 11, "bold"), pady=12, padx=20,
-                          anchor="w").pack(fill="x")
-            tkinter.Frame(card, bg=BORDER, height=1).pack(fill="x", padx=20)
-            body = tkinter.Frame(card, bg=BG_CARD)
-            body.pack(fill="x", padx=20, pady=(8, 16))
-            for sec_title, sec_text in sections:
-                tkinter.Label(body, text=sec_title, bg=BG_CARD, fg=ACCENT,
+        if not _AB_FILE.exists():
+            tkinter.Label(inner, text="ABOUT.md non trovato.",
+                          bg=BG, fg=TEXT_SEC, font=("Consolas", 10),
+                          padx=40).pack(anchor="w", pady=16)
+            tkinter.Frame(inner, bg=BG).pack(pady=20)
+            return
+
+        def _insert_rich(widget, text, base_tag):
+            parts = _re.split(r'(\*\*[^*]+\*\*)', text)
+            for part in parts:
+                if part.startswith("**") and part.endswith("**"):
+                    widget.insert("end", part[2:-2], (base_tag, "bold"))
+                else:
+                    widget.insert("end", part, base_tag)
+
+        def _text_widget(parent_frame, bg, fg, text, pady=2):
+            t = tkinter.Text(parent_frame, bg=bg, fg=fg,
+                             font=("Consolas", 9), bd=0, highlightthickness=0,
+                             wrap="word", cursor="arrow", height=1,
+                             padx=0, pady=pady)
+            t.tag_configure("normal", font=("Consolas", 9),       foreground=fg)
+            t.tag_configure("bold",   font=("Consolas", 9, "bold"), foreground=fg)
+            _insert_rich(t, text, "normal")
+            t.configure(state="disabled")
+            t.pack(fill="x", anchor="w")
+            t.update_idletasks()
+            lines = int(t.index("end-1c").split(".")[0])
+            t.configure(height=lines)
+            return t
+
+        text_widgets = []
+        card = None
+        body = None
+
+        for line in _AB_FILE.read_text(encoding="utf-8").splitlines():
+            if line.startswith("## "):
+                card = tkinter.Frame(inner, bg=BG_CARD, bd=0,
+                                     highlightthickness=1, highlightbackground=BORDER)
+                card.pack(fill="x", padx=40, pady=(16, 0))
+                tkinter.Label(card, text=line[3:].strip(), bg=BG_CARD, fg=TEXT_PRI,
+                              font=("Consolas", 11, "bold"), pady=12, padx=20,
+                              anchor="w").pack(fill="x")
+                tkinter.Frame(card, bg=BORDER, height=1).pack(fill="x", padx=20)
+                body = tkinter.Frame(card, bg=BG_CARD)
+                body.pack(fill="x", padx=20, pady=(8, 16))
+            elif line.startswith("### ") and body is not None:
+                tkinter.Label(body, text=line[4:].strip(), bg=BG_CARD, fg=ACCENT,
                               font=("Consolas", 9, "bold"), anchor="w").pack(
                               fill="x", pady=(10, 2))
-                lbl = tkinter.Label(body, text=sec_text, bg=BG_CARD, fg=TEXT_SEC,
-                                    font=("Consolas", 9), anchor="w", justify="left",
-                                    wraplength=560)
-                lbl.pack(fill="x", padx=(8, 0))
-                text_labels.append(lbl)
+            elif line.startswith("#"):
+                pass
+            elif line.strip() and body is not None:
+                tw = _text_widget(body, BG_CARD, TEXT_SEC, line.strip())
+                text_widgets.append(tw)
+            elif not line.strip() and body is not None:
+                pass
 
-        def _update_wraplength(e):
-            wl = max(200, e.width - 160)
-            for lbl in text_labels:
-                lbl.configure(wraplength=wl)
-        inner.bind("<Configure>", _update_wraplength, add="+")
+        def _update_wrap(e):
+            for tw in text_widgets:
+                tw.update_idletasks()
+                lines = int(tw.index("end-1c").split(".")[0])
+                tw.configure(height=lines)
+        inner.bind("<Configure>", _update_wrap, add="+")
         tkinter.Frame(inner, bg=BG).pack(pady=20)
 
     def _on_env_click(self, value):
@@ -15125,19 +14904,20 @@ def _show_update_dialog(app):
                     f.write(chunk)
             shutil.move(str(tmp), str(current))
             # Scarica CHANGELOG.md aggiornato
-            try:
-                cl_resp = _req.get(
-                    "https://raw.githubusercontent.com/dcurreli4/pln_fr_tool_AIO/main/CHANGELOG.md",
-                    timeout=10,
-                )
-                if cl_resp.ok:
-                    (here / "CHANGELOG.md").write_bytes(cl_resp.content)
-                else:
-                    status_var.set(f"CHANGELOG non scaricato: HTTP {cl_resp.status_code}")
+            for _md_file in ("CHANGELOG.md", "ABOUT.md"):
+                try:
+                    _md_resp = _req.get(
+                        f"https://raw.githubusercontent.com/dcurreli4/pln_fr_tool_AIO/main/{_md_file}",
+                        timeout=10,
+                    )
+                    if _md_resp.ok:
+                        (here / _md_file).write_bytes(_md_resp.content)
+                    else:
+                        status_var.set(f"{_md_file} non scaricato: HTTP {_md_resp.status_code}")
+                        popup.update()
+                except Exception as _md_err:
+                    status_var.set(f"{_md_file} non scaricato: {_md_err}")
                     popup.update()
-            except Exception as cl_err:
-                status_var.set(f"CHANGELOG non scaricato: {cl_err}")
-                popup.update()
             status_var.set("Aggiornato. Riavvio in corso...")
             popup.update()
             # Flag per mostrare il changelog al riavvio
