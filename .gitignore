@@ -1,3 +1,6 @@
+# Configurazione locale con credenziali
+config/.env
+
 # Chiavi SSH e certificati
 *.pem
 *.ppk
