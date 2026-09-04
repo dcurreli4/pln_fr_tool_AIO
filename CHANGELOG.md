@@ -1,3 +1,10 @@
+### v1.6.20 — 2026-09-04
+- **HUB Filter — Filtro → On Hold**: implementata operazione di spostamento da `sap_filter_contract` a `sap_filter_contract_on_hold` — conteggi pre-operazione (da spostare, già in hold, non trovati), INSERT con `sap_list_supply_csv = cluster + data`, DELETE dalla sorgente, commit unico
+- **HUB Filter — On Hold → Filtro**: implementata operazione inversa — ripristino da `sap_filter_contract_on_hold` a `sap_filter_contract` con stessa logica di conteggi e overwrite `sap_list_supply_csv`
+- **HUB Filter**: rinominato da "HUB Filter Updater" a "HUB Filter"; aggiunta sidebar con radio button per selezionare operazione (Inserimento filtri / Filtro → On Hold / On Hold → Filtro)
+- **File Filter — Plan ID**: chiave filtro "Agreement ID" rinominata "Plan ID" — ora usa fallback `agreement_id (col 0) OR sap_plan_id (col 12)` per gestire entrambi i formati; aggiunta colonna `PP_SAP_PLAN_ID_COL` in `_PP_DEFAULTS`
+- **ABOUT.md**: creato file esterno con descrizione di tutti i tool — scaricato automaticamente insieme a `CHANGELOG.md` ad ogni aggiornamento
+
 ### v1.6.19 — 2026-08-12
 - **File Filter — Invoice**: aggiunta sotto-tab "Prm + Kraken Account" con treeview a due colonne (PRM | Kraken Account), identica a Payment Plans Filter e Hub Filter Updater
 - **File Filter — Invoice**: `zip_path.unlink()` all'avvio di ogni run — elimina lo ZIP esistente prima di rigenerarlo

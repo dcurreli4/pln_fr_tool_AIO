@@ -11,6 +11,21 @@ Customer, Agreement, Sap filter contract, Identifier version map, Sap old plan m
 ### Stop
 Il bottone ■ Stop interrompe l'operazione al termine del batch corrente, esegue rollback e chiude tutte le connessioni in modo pulito.
 
+## 🔎 HUB Filter
+
+### Cosa fa
+Gestisce i filtri della tabella `sap_filter_contract` su HUB. Supporta tre operazioni selezionabili via radio button nella barra laterale: inserimento nuovi filtri, spostamento su On Hold, ripristino da On Hold.
+
+### Operazioni
+**Inserimento filtri** — Inserisce coppie PRM / Kraken Account nella tabella `sap_filter_contract` tramite `z_dc_filter_import`, escludendo righe già presenti o già in `on_hold`.
+
+**Filtro → On Hold** — Sposta i filtri selezionati da `sap_filter_contract` a `sap_filter_contract_on_hold`. Aggiorna `sap_list_supply_csv` con il valore del campo Cluster + data corrente. Logga i conteggi pre-operazione: da spostare, già in hold, non trovati.
+
+**On Hold → Filtro** — Operazione inversa: ripristina i filtri da `sap_filter_contract_on_hold` a `sap_filter_contract`. Stesso aggiornamento di `sap_list_supply_csv` con Cluster + data.
+
+### Input
+Il campo Cluster è obbligatorio per tutte le operazioni. Le coppie PRM / Kraken Account si caricano tramite il popup Modifica/Aggiungi con validazione formato (prm;A-xxxxxxxx).
+
 ## 🐙 Kraken Data Extractor
 
 ### Modalità operative
@@ -97,7 +112,7 @@ Le cartelle da comprimere sono elencate in input/zip folder/folders.txt. La cart
 Gestisce due flussi distinti in tab separate: **Payment Plans** e **Invoice**. Ogni flusso filtra file CSV per le righe corrispondenti agli ID caricati nei file di filtro, produce i file filtrati e li comprime in un ZIP.
 
 ### Tab Payment Plans
-Filtra file CSV con pattern K[EG]_PP_*.csv. Output in output/payment plans filter/. Chiavi di filtro disponibili: **Agreement ID**, **Prm + Kraken Account** (coppia prm;A-xxxxxxxx), **Agreement ID + Plan Type** (coppia id;M|C|R|U). L'opzione 'Trasforma file ;C; → ;U;' sostituisce il valore C con U nelle righe mantenute.
+Filtra file CSV con pattern K[EG]_PP_*.csv. Output in output/payment plans filter/. Chiavi di filtro disponibili: **Plan ID** (agreement_id col 0 o sap_plan_id col 12, con fallback automatico), **Prm + Kraken Account** (coppia prm;A-xxxxxxxx), **Plan ID + Plan Type** (coppia id;M|C|R|U). L'opzione 'Trasforma file ;C; → ;U;' sostituisce il valore C con U nelle righe mantenute.
 
 ### Tab Invoice
 Filtra file CSV invoice per **Identifier** (prefisso EB/GB) e **Prm + Kraken Account**. Output in output/invoice filter/. Il ZIP esistente viene eliminato automaticamente ad ogni run.

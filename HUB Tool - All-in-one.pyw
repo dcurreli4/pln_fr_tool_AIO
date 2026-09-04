@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.19"
+VERSION_LAUNCHER = "1.6.20"
 
 
 _REQUIRED = {
@@ -13061,7 +13061,42 @@ class HubFilterUpdater(_AppBase):
         body = Frame(parent, bg=BG)
         body.pack(fill="both", expand=True)
 
-        top = Frame(body, bg=BG_CARD, bd=0, highlightthickness=1,
+        # ── Layout: sidebar sinistra + contenuto principale ───────────────
+        layout = Frame(body, bg=BG)
+        layout.pack(fill="both", expand=True)
+
+        # Sidebar
+        sidebar = Frame(layout, bg=BG_CARD, bd=0, highlightthickness=1,
+                        highlightbackground=BORDER, width=220)
+        sidebar.pack(side="left", fill="y", padx=(0, 8))
+        sidebar.pack_propagate(False)
+
+        Label(sidebar, text="OPERAZIONE", bg=BG_CARD, fg=TEXT_SEC,
+              font=("Consolas", 9, "bold"), pady=10, padx=14,
+              anchor="w").pack(fill="x")
+        Frame(sidebar, bg=BORDER, height=1).pack(fill="x", padx=14)
+
+        self._uhf_op_var = tkinter.StringVar(value="insert")
+        _ops = [
+            ("insert",   "Inserimento filtri"),
+            ("to_hold",  "Filtro → On Hold"),
+            ("from_hold","On Hold → Filtro"),
+        ]
+        for value, label in _ops:
+            rb = tkinter.Radiobutton(
+                sidebar, text=label, variable=self._uhf_op_var, value=value,
+                bg=BG_CARD, fg=TEXT_PRI, selectcolor=BG_INPUT,
+                activebackground=BG_CARD, activeforeground=TEXT_PRI,
+                font=("Consolas", 9), anchor="w", cursor="hand2",
+                padx=14, pady=6, indicatoron=True,
+            )
+            rb.pack(fill="x")
+
+        # Contenuto principale
+        main = Frame(layout, bg=BG)
+        main.pack(side="left", fill="both", expand=True)
+
+        top = Frame(main, bg=BG_CARD, bd=0, highlightthickness=1,
                     highlightbackground=BORDER)
         top.pack(fill="x", pady=(0, 10))
 
@@ -13084,7 +13119,7 @@ class HubFilterUpdater(_AppBase):
         self._btn = self._make_btn(row, "▶  Avvia", self._start)
         self._btn.pack(side="right", padx=(12, 0))
 
-        log_frame = Frame(body, bg=BG_CARD, bd=0, highlightthickness=1,
+        log_frame = Frame(main, bg=BG_CARD, bd=0, highlightthickness=1,
                           highlightbackground=BORDER)
         log_frame.pack(fill="both", expand=True)
         self._build_log_panel(log_frame, on_clear=self._clear_log)
@@ -13266,7 +13301,186 @@ class HubFilterUpdater(_AppBase):
         self._cluster_entry.configure(state="disabled", highlightbackground=BORDER)
         self._status_var.set("In esecuzione ...")
         cluster = self._cluster_var.get().strip()
-        threading.Thread(target=self._run, args=(cluster, pairs), daemon=True).start()
+        op = self._uhf_op_var.get()
+        if op == "insert":
+            threading.Thread(target=self._run, args=(cluster, pairs), daemon=True).start()
+        elif op == "to_hold":
+            threading.Thread(target=self._run_to_hold, args=(cluster, pairs), daemon=True).start()
+        elif op == "from_hold":
+            threading.Thread(target=self._run_from_hold, args=(cluster, pairs), daemon=True).start()
+
+    def _run_to_hold(self, cluster: str, pairs: list):
+        try:
+            self._enqueue_log("[INFO] Connessione HUB ...", "info")
+            conn = get_hub_connection()
+            cur = conn.cursor()
+            self._enqueue_log("[OK] Connessione HUB attiva ✓", "ok")
+
+            prm_list = ", ".join(f"'{p}{k}'" for p, k in pairs)
+            sap_list_supply = f"{cluster} {__import__('datetime').datetime.now().strftime('%d/%m/%Y %H:%M')}"
+
+            # Conteggio pre-operazione
+            cur.execute(f"""
+                SELECT COUNT(*) FROM public.sap_filter_contract sfc
+                JOIN unnest(ARRAY[{prm_list}]) AS x(prmnum)
+                  ON x.prmnum = concat(sfc.supply_code, sfc.kraken_account)
+            """)
+            cnt_to_move = cur.fetchone()[0]
+
+            cur.execute(f"""
+                SELECT COUNT(*) FROM public.sap_filter_contract_on_hold oh
+                JOIN unnest(ARRAY[{prm_list}]) AS x(prmnum)
+                  ON x.prmnum = concat(oh.supply_code, oh.kraken_account)
+            """)
+            cnt_already_hold = cur.fetchone()[0]
+
+            cur.execute(f"""
+                SELECT COUNT(*) FROM unnest(ARRAY[{prm_list}]) AS x(prmnum)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM public.sap_filter_contract sfc
+                    WHERE concat(sfc.supply_code, sfc.kraken_account) = x.prmnum
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM public.sap_filter_contract_on_hold oh
+                    WHERE concat(oh.supply_code, oh.kraken_account) = x.prmnum
+                )
+            """)
+            cnt_not_found = cur.fetchone()[0]
+
+            self._enqueue_log(
+                f"[INFO] Trovati in sap_filter_contract:   {cnt_to_move}",   "info")
+            self._enqueue_log(
+                f"[INFO] Già presenti in on_hold:          {cnt_already_hold}", "info")
+            self._enqueue_log(
+                f"[INFO] Non trovati in nessuna tabella:   {cnt_not_found}",  "info")
+
+            if cnt_to_move == 0:
+                self._enqueue_log("[WARN] Nessun filtro da spostare su On Hold.", "warn")
+                cur.close(); conn.close()
+                self.after(0, self._on_done, False)
+                return
+
+            # INSERT into on_hold (escludi già presenti)
+            cur.execute(f"""
+                INSERT INTO public.sap_filter_contract_on_hold
+                    (id, commodity, contract, execute_time_stamp, kraken_account,
+                     sap_list_supply_csv, supply_code, batch_id, "uuid")
+                SELECT id, commodity, contract, execute_time_stamp, kraken_account,
+                       %s AS sap_list_supply_csv,
+                       supply_code, batch_id, "uuid"
+                FROM public.sap_filter_contract sfc
+                JOIN unnest(ARRAY[{prm_list}]) AS x(prmnum)
+                  ON x.prmnum = concat(sfc.supply_code, sfc.kraken_account)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM public.sap_filter_contract_on_hold oh
+                    WHERE concat(oh.supply_code, oh.kraken_account) = x.prmnum
+                )
+            """, (sap_list_supply,))
+            inserted = cur.rowcount
+            self._enqueue_log(f"[OK] Inseriti in on_hold: {inserted} righe", "ok")
+
+            # DELETE da sap_filter_contract
+            cur.execute(f"""
+                DELETE FROM public.sap_filter_contract sfc
+                USING unnest(ARRAY[{prm_list}]) AS x(prmnum)
+                WHERE x.prmnum = concat(sfc.supply_code, sfc.kraken_account)
+            """)
+            deleted = cur.rowcount
+            self._enqueue_log(f"[OK] Eliminati da sap_filter_contract: {deleted} righe", "ok")
+
+            conn.commit()
+            cur.close(); conn.close()
+            self._enqueue_log("[OK] Operazione 'Filtro → On Hold' completata ✓", "ok")
+            self.after(0, self._on_done, True)
+        except Exception as e:
+            self._enqueue_log(f"[ERRORE] {e}", "error")
+            self.after(0, self._on_done, False)
+
+    def _run_from_hold(self, cluster: str, pairs: list):
+        try:
+            self._enqueue_log("[INFO] Connessione HUB ...", "info")
+            conn = get_hub_connection()
+            cur = conn.cursor()
+            self._enqueue_log("[OK] Connessione HUB attiva ✓", "ok")
+
+            prm_list = ", ".join(f"'{p}{k}'" for p, k in pairs)
+            sap_list_supply = f"{cluster} {__import__('datetime').datetime.now().strftime('%d/%m/%Y %H:%M')}"
+
+            # Conteggio pre-operazione
+            cur.execute(f"""
+                SELECT COUNT(*) FROM public.sap_filter_contract_on_hold oh
+                JOIN unnest(ARRAY[{prm_list}]) AS x(prmnum)
+                  ON x.prmnum = concat(oh.supply_code, oh.kraken_account)
+            """)
+            cnt_to_restore = cur.fetchone()[0]
+
+            cur.execute(f"""
+                SELECT COUNT(*) FROM public.sap_filter_contract sfc
+                JOIN unnest(ARRAY[{prm_list}]) AS x(prmnum)
+                  ON x.prmnum = concat(sfc.supply_code, sfc.kraken_account)
+            """)
+            cnt_already_active = cur.fetchone()[0]
+
+            cur.execute(f"""
+                SELECT COUNT(*) FROM unnest(ARRAY[{prm_list}]) AS x(prmnum)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM public.sap_filter_contract_on_hold oh
+                    WHERE concat(oh.supply_code, oh.kraken_account) = x.prmnum
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM public.sap_filter_contract sfc
+                    WHERE concat(sfc.supply_code, sfc.kraken_account) = x.prmnum
+                )
+            """)
+            cnt_not_found = cur.fetchone()[0]
+
+            self._enqueue_log(
+                f"[INFO] Trovati in on_hold:               {cnt_to_restore}",    "info")
+            self._enqueue_log(
+                f"[INFO] Già presenti in sap_filter_contract: {cnt_already_active}", "info")
+            self._enqueue_log(
+                f"[INFO] Non trovati in nessuna tabella:   {cnt_not_found}",     "info")
+
+            if cnt_to_restore == 0:
+                self._enqueue_log("[WARN] Nessun filtro da ripristinare dal On Hold.", "warn")
+                cur.close(); conn.close()
+                self.after(0, self._on_done, False)
+                return
+
+            # INSERT into sap_filter_contract (escludi già presenti)
+            cur.execute(f"""
+                INSERT INTO public.sap_filter_contract
+                    (id, commodity, contract, execute_time_stamp, kraken_account,
+                     sap_list_supply_csv, supply_code, batch_id, "uuid")
+                SELECT id, commodity, contract, execute_time_stamp, kraken_account,
+                       %s AS sap_list_supply_csv, supply_code, batch_id, "uuid"
+                FROM public.sap_filter_contract_on_hold oh
+                JOIN unnest(ARRAY[{prm_list}]) AS x(prmnum)
+                  ON x.prmnum = concat(oh.supply_code, oh.kraken_account)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM public.sap_filter_contract sfc
+                    WHERE concat(sfc.supply_code, sfc.kraken_account) = x.prmnum
+                )
+            """, (sap_list_supply,))
+            inserted = cur.rowcount
+            self._enqueue_log(f"[OK] Inseriti in sap_filter_contract: {inserted} righe", "ok")
+
+            # DELETE da on_hold
+            cur.execute(f"""
+                DELETE FROM public.sap_filter_contract_on_hold oh
+                USING unnest(ARRAY[{prm_list}]) AS x(prmnum)
+                WHERE x.prmnum = concat(oh.supply_code, oh.kraken_account)
+            """)
+            deleted = cur.rowcount
+            self._enqueue_log(f"[OK] Eliminati da on_hold: {deleted} righe", "ok")
+
+            conn.commit()
+            cur.close(); conn.close()
+            self._enqueue_log("[OK] Operazione 'On Hold → Filtro' completata ✓", "ok")
+            self.after(0, self._on_done, True)
+        except Exception as e:
+            self._enqueue_log(f"[ERRORE] {e}", "error")
+            self.after(0, self._on_done, False)
 
     def _run(self, cluster: str, pairs: list):
         from datetime import datetime
@@ -13522,7 +13736,7 @@ _APPS = [
     {
         "key":     "hfupdater",
         "icon":    "🔁",
-        "label":   "Hub Filter Updater",
+        "label":   "HUB Filter",
         "minsize": (820, 560),
         "size":    (960, 660),
         "class":   None,
