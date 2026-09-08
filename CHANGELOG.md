@@ -1,3 +1,10 @@
+### v1.6.21 — 2026-09-08
+- **Changelog**: stesso renderer dell'About — card per versione, `Label` con `wraplength` dinamico anti-loop, supporto `**bold**`
+- **About / Changelog**: fix wraplength con `_last_w` — evita loop infinito su `<Configure>`
+- **HUB Filter**: fix conteggio "Non trovati in nessuna tabella" — ora esclude correttamente chi è già nell'altra tabella (on_hold o sap_filter_contract)
+- **HUB Filter — On Hold → Filtro**: fix `sap_list_supply_csv` — ora sovrascritto con `cluster + data` come nel flusso inverso
+- **Payment Filter**: validazione esplicita proprietà vuote prima dell'avvio — messaggio di errore nel log con percorso Impostazioni → File Filter → Payments; default `PAY_OUTPUT_SUBFOLDER` aggiornato a `output/payment plans filter`
+
 ### v1.6.20 — 2026-09-04
 - **HUB Filter — Filtro → On Hold**: implementata operazione di spostamento da `sap_filter_contract` a `sap_filter_contract_on_hold` — conteggi pre-operazione (da spostare, già in hold, non trovati), INSERT con `sap_list_supply_csv = cluster + data`, DELETE dalla sorgente, commit unico
 - **HUB Filter — On Hold → Filtro**: implementata operazione inversa — ripristino da `sap_filter_contract_on_hold` a `sap_filter_contract` con stessa logica di conteggi e overwrite `sap_list_supply_csv`

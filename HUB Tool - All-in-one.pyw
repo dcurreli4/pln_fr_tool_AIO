@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.20"
+VERSION_LAUNCHER = "1.6.21"
 
 
 _REQUIRED = {
@@ -7157,7 +7157,7 @@ _PAY_BASE                      = _HERE / "input" / "file filter" / "payment"
 _PAY_FILTER_FILE_SIMPLE        = _PAY_BASE / "filter_payment_reference.txt"
 _PAY_FILTER_FILE_COMPOSITE     = _PAY_BASE / "filter_payment_key_ref_date_type.txt"
 _PAY_DEFAULTS = {
-    "PAY_OUTPUT_SUBFOLDER": "output",
+    "PAY_OUTPUT_SUBFOLDER": "output/payment plans filter",
     "PAY_ZIP_FILENAME":     "payment.zip",
     "PAY_FILTER_MODE":      "key_ref_date_type",
     "PAY_DEBUG_KEYS":       "false",
@@ -8314,15 +8314,30 @@ class FileFilter(_AppBase):
         self._pay_running = True
         self._pay_btn.configure(fg=TEXT_SEC, cursor="arrow")
         self._status_var.set("In esecuzione...")
+        _required = [
+            ("PAY_OUTPUT_SUBFOLDER", "Sottocartella output"),
+            ("PAY_ZIP_FILENAME",     "Nome ZIP"),
+            ("PAY_COL_REFERENCE",    "Reference col"),
+            ("PAY_COL_AMOUNT",       "Amount col"),
+            ("PAY_COL_PAYMENT_DATE", "Payment Date col"),
+        ]
+        for _key, _label in _required:
+            if not env.get(_key, "").strip():
+                self._pay_enqueue_log(
+                    f"[ERRORE] Proprietà '{_label}' ({_key}) non configurata — vai in Impostazioni → File Filter → Payments.", "error")
+                self._pay_running = False
+                self._pay_btn.configure(fg=TEXT_PRI, cursor="hand2")
+                self._status_var.set("Errore configurazione.")
+                return
         cfg = {
             "input_folder":      input_folder,
-            "output_subfolder":  env.get("PAY_OUTPUT_SUBFOLDER", "output"),
-            "zip_filename":      env.get("PAY_ZIP_FILENAME", "payment.zip"),
+            "output_subfolder":  env.get("PAY_OUTPUT_SUBFOLDER"),
+            "zip_filename":      env.get("PAY_ZIP_FILENAME"),
             "filter_mode":       env.get("PAY_FILTER_MODE", "key_ref_date_type"),
             "debug_keys":        env.get("PAY_DEBUG_KEYS", "false").lower() == "true",
-            "col_reference":     int(env.get("PAY_COL_REFERENCE", "12")),
-            "col_amount":        int(env.get("PAY_COL_AMOUNT", "8")),
-            "col_payment_date":  int(env.get("PAY_COL_PAYMENT_DATE", "9")),
+            "col_reference":     int(env.get("PAY_COL_REFERENCE")),
+            "col_amount":        int(env.get("PAY_COL_AMOUNT")),
+            "col_payment_date":  int(env.get("PAY_COL_PAYMENT_DATE")),
         }
         threading.Thread(
             target=pay_run_pipeline,
@@ -14133,16 +14148,14 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
                       font=("Consolas", 16, "bold"), anchor="w").pack(anchor="w")
         tkinter.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=40, pady=(16, 0))
 
-        body = tkinter.Frame(inner, bg=BG)
-        body.pack(fill="both", expand=True, padx=40, pady=(16, 30))
-
         if not _CL_FILE.exists():
-            tkinter.Label(body, text="CHANGELOG.md non trovato.",
-                          bg=BG, fg=TEXT_SEC, font=("Consolas", 10)).pack(anchor="w")
+            tkinter.Label(inner, text="CHANGELOG.md non trovato.",
+                          bg=BG, fg=TEXT_SEC, font=("Consolas", 10),
+                          padx=40).pack(anchor="w", pady=16)
+            tkinter.Frame(inner, bg=BG).pack(pady=20)
             return
 
         def _insert_rich(widget, text, base_tag):
-            """Inserisce testo in un Text widget interpretando **bold**."""
             parts = _re.split(r'(\*\*[^*]+\*\*)', text)
             for part in parts:
                 if part.startswith("**") and part.endswith("**"):
@@ -14150,36 +14163,53 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
                 else:
                     widget.insert("end", part, base_tag)
 
-        def _text_line(text, fg, font_normal, font_bold, pady=1):
-            t = tkinter.Text(body, bg=BG, fg=fg,
-                             font=font_normal, bd=0, highlightthickness=0,
-                             state="normal", wrap="word", cursor="arrow",
-                             height=1, padx=0, pady=pady)
-            t.tag_configure("normal", font=font_normal, foreground=fg)
-            t.tag_configure("bold",   font=font_bold,   foreground=fg)
-            _insert_rich(t, text, "normal")
-            t.configure(state="disabled")
-            t.pack(fill="x", anchor="w")
-            # Adatta altezza al contenuto dopo il pack
-            t.update_idletasks()
-            lines = int(t.index("end-1c").split(".")[0])
-            t.configure(height=lines)
+        def _text_widget(parent_frame, bg, fg, text, pady=2):
+            parts = _re.split(r'(\*\*[^*]+\*\*)', text)
+            has_bold = any(p.startswith("**") and p.endswith("**") for p in parts)
+            if not has_bold:
+                lbl = tkinter.Label(parent_frame, text=text, bg=bg, fg=fg,
+                                    font=("Consolas", 9), anchor="w", justify="left",
+                                    wraplength=1)
+                lbl.pack(fill="x", anchor="w", pady=pady)
+                _last_w = [0]
+                def _on_cfg(e, w=lbl, last=_last_w):
+                    if e.width != last[0]:
+                        last[0] = e.width
+                        w.configure(wraplength=e.width)
+                lbl.bind("<Configure>", _on_cfg)
+                return lbl
+            else:
+                t = tkinter.Text(parent_frame, bg=bg, fg=fg,
+                                 font=("Consolas", 9), bd=0, highlightthickness=0,
+                                 wrap="word", cursor="arrow", height=1,
+                                 padx=0, pady=pady)
+                t.tag_configure("normal", font=("Consolas", 9),        foreground=fg)
+                t.tag_configure("bold",   font=("Consolas", 9, "bold"), foreground=fg)
+                _insert_rich(t, text, "normal")
+                t.configure(state="disabled")
+                t.pack(fill="x", anchor="w")
+                return t
+
+        card = None
+        body = None
 
         for line in _CL_FILE.read_text(encoding="utf-8").splitlines():
             if line.startswith("### "):
-                tkinter.Label(body, text=line[4:].strip(),
-                              bg=BG, fg=TEXT_PRI,
-                              font=("Consolas", 11, "bold"), anchor="w").pack(
-                              anchor="w", pady=(16, 2))
-                tkinter.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 6))
+                card = tkinter.Frame(inner, bg=BG_CARD, bd=0,
+                                     highlightthickness=1, highlightbackground=BORDER)
+                card.pack(fill="x", padx=40, pady=(16, 0))
+                tkinter.Label(card, text=line[4:].strip(), bg=BG_CARD, fg=TEXT_PRI,
+                              font=("Consolas", 11, "bold"), pady=12, padx=20,
+                              anchor="w").pack(fill="x")
+                tkinter.Frame(card, bg=BORDER, height=1).pack(fill="x", padx=20)
+                body = tkinter.Frame(card, bg=BG_CARD)
+                body.pack(fill="x", padx=20, pady=(8, 16))
             elif line.startswith("#"):
                 pass
-            elif line.strip().startswith("- "):
-                _text_line(line.strip(),
-                           fg=TEXT_SEC,
-                           font_normal=("Consolas", 9),
-                           font_bold=("Consolas", 9, "bold"),
-                           pady=1)
+            elif line.strip().startswith("- ") and body is not None:
+                _text_widget(body, BG_CARD, TEXT_SEC, line.strip(), pady=1)
+
+        tkinter.Frame(inner, bg=BG).pack(pady=20)
 
     def _select_panel(self, key):
         """Mostra about o settings nel frame principale senza popup."""
@@ -14619,19 +14649,32 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
                     widget.insert("end", part, base_tag)
 
         def _text_widget(parent_frame, bg, fg, text, pady=2):
-            t = tkinter.Text(parent_frame, bg=bg, fg=fg,
-                             font=("Consolas", 9), bd=0, highlightthickness=0,
-                             wrap="word", cursor="arrow", height=1,
-                             padx=0, pady=pady)
-            t.tag_configure("normal", font=("Consolas", 9),       foreground=fg)
-            t.tag_configure("bold",   font=("Consolas", 9, "bold"), foreground=fg)
-            _insert_rich(t, text, "normal")
-            t.configure(state="disabled")
-            t.pack(fill="x", anchor="w")
-            t.update_idletasks()
-            lines = int(t.index("end-1c").split(".")[0])
-            t.configure(height=lines)
-            return t
+            parts = _re.split(r'(\*\*[^*]+\*\*)', text)
+            has_bold = any(p.startswith("**") and p.endswith("**") for p in parts)
+            if not has_bold:
+                lbl = tkinter.Label(parent_frame, text=text, bg=bg, fg=fg,
+                                    font=("Consolas", 9), anchor="w", justify="left",
+                                    wraplength=1)
+                lbl.pack(fill="x", anchor="w", pady=pady)
+                _last_w = [0]
+                def _on_cfg(e, w=lbl, last=_last_w):
+                    if e.width != last[0]:
+                        last[0] = e.width
+                        w.configure(wraplength=e.width)
+                lbl.bind("<Configure>", _on_cfg)
+                return lbl
+            else:
+                # Testo con bold: Text widget read-only
+                t = tkinter.Text(parent_frame, bg=bg, fg=fg,
+                                 font=("Consolas", 9), bd=0, highlightthickness=0,
+                                 wrap="word", cursor="arrow", height=1,
+                                 padx=0, pady=pady)
+                t.tag_configure("normal", font=("Consolas", 9),        foreground=fg)
+                t.tag_configure("bold",   font=("Consolas", 9, "bold"), foreground=fg)
+                _insert_rich(t, text, "normal")
+                t.configure(state="disabled")
+                t.pack(fill="x", anchor="w")
+                return t
 
         text_widgets = []
         card = None
@@ -14660,12 +14703,6 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
             elif not line.strip() and body is not None:
                 pass
 
-        def _update_wrap(e):
-            for tw in text_widgets:
-                tw.update_idletasks()
-                lines = int(tw.index("end-1c").split(".")[0])
-                tw.configure(height=lines)
-        inner.bind("<Configure>", _update_wrap, add="+")
         tkinter.Frame(inner, bg=BG).pack(pady=20)
 
     def _on_env_click(self, value):
