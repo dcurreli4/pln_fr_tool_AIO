@@ -1,3 +1,15 @@
+### v1.7.1 — 2026-09-11
+- **Kraken Full Data Extractor**: refactoring UI — sezione Pipeline spostata in tab; aggiunta tab Data Input con sottotab Invoice (identifier EB.../GB...) per il Delta
+- **Kraken Full Data Extractor — Delta Invoice**: nuova sezione collassabile "Delta" nella sidebar — DELETE + ricaricamento selettivo da Kraken per gli identifier indicati in Data Input; filtro `AND document.identifier IN (...)` iniettato nella query
+- **Kraken Full Data Extractor**: sidebar "Full" e "Delta" collassabili (accordion); titolo sidebar rinominato "Full"
+- **Kraken Full Data Extractor**: fix callback `_on_done_with_stop` — aggiunto `**kwargs` per gestire il parametro `elapsed` passato dalla pipeline senza crash
+- **Kraken Full Data Extractor**: fix `_start` — ora usa `self._on_done` invece di `self._on_done_with_stop` per preservare il salvataggio dei tempi nel `.env`
+- **Validazione identifier**: estratto `_validate_identifiers` come metodo statico condiviso in `_AppBase` — usato da KDE, KFDE e FileFilter senza duplicazione
+- **_AppBase**: estratto `_save_tree_to_file` in `_AppBase` — disponibile a tutte le sezioni
+- **Quadratura HUB-SAP**: fix tempi pipeline — tutti i messaggi ora in formato `Xm Ys` invece di secondi decimali
+- **Quadratura HUB-SAP**: heartbeat ogni 60s durante `CREATE MATERIALIZED VIEW` e `CREATE INDEX`
+- **Quadratura HUB-SAP**: sidebar Pipeline ridotta a 200px
+
 ### v1.7.0 — 2026-09-11
 - **Quadratura HUB-SAP**: nuova sezione con 3 modalità (Creazione plan HUB, Creazione plan SAP, Quadratura HUB-SAP) — pipeline DROP CASCADE → CREATE MATERIALIZED VIEW → CREATE INDEX su HUB prod; no slider ambiente (sempre prod)
 - **Quadratura HUB-SAP — Input Tables**: tab per upload CSV su tabelle `dfkkop`, `afb`, `z_invoice_sap_per_quadratura` — drop zone + picklist tabella, validazione colonne case-insensitive, caricamento chunked (50k righe), supporto ZIP, skip righe vuote iniziali

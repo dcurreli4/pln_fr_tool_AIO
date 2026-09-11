@@ -48,15 +48,24 @@ Reference: input/kraken data extractor/data_input_reference.txt
 ## 🔬 Kraken Full Data Extractor
 
 ### Cosa fa
-Estrae dati full (senza filtri) da Kraken PROD e li carica direttamente su HUB PROD nelle tabelle j_kraken_*. Per ogni flow: TRUNCATE + estrazione Kraken + bulk insert su HUB con cursore server-side a batch da 10.000 righe.
+Estrae dati da Kraken PROD e li carica direttamente su HUB PROD nelle tabelle j_kraken_*. Supporta due modalità selezionabili dalla sidebar: **Full** e **Delta**.
 
-### Tabelle estratte
+### Tab Pipeline — Sezione Full
+Per ogni flow selezionato: TRUNCATE + estrazione Kraken + bulk insert su HUB con cursore server-side a batch da 10.000 righe.
+
+**Tabelle estratte**
 Customer → j_kraken_customer
 Agreement → j_kraken_agreement
 Payment Plan (ELEC + GAS) → j_kraken_payment_plan
 Renewal → j_kraken_renewal
 Invoice (ELEC + GAS) → j_kraken_invoice
 Payment (ELEC + GAS) → j_kraken_payments
+
+### Tab Pipeline — Sezione Delta
+Ricaricamento selettivo per identifier. Per gli identifier inseriti nella tab Data Input → Invoice: DELETE da j_kraken_invoice + riestrazione da Kraken con filtro `document.identifier IN (...)` sulle query Invoice Elec e Gas.
+
+### Tab Data Input
+Sottotab **Invoice**: lista di document identifier (formato EB.../GB...) da usare nel flusso Delta. Validazione formato con evidenziazione righe non valide. Persistita in `input/kraken full data extractor/data_input_invoice.txt`.
 
 ### Tempi stimati
 Dopo ogni esecuzione i tempi per flow vengono salvati nel .env (chiavi ADE_TIME_*) e mostrati accanto alle checkbox come previsione per i run futuri. Al passaggio del mouse appare un tooltip esplicativo.

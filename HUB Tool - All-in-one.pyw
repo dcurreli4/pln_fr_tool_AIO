@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.7.0"
+VERSION_LAUNCHER = "1.7.1"
 
 
 _REQUIRED = {
@@ -881,7 +881,7 @@ class _AppBase(tkinter.Frame):
 
 
 
-    def _on_done_with_stop(self, success: bool):
+    def _on_done_with_stop(self, success: bool, **kwargs):
         self._running = False
         self._stop_requested = False
         self._btn_stop.configure(fg=TEXT_SEC, cursor="arrow")
@@ -1060,6 +1060,29 @@ class _AppBase(tkinter.Frame):
         tunnel = open_ssh_tunnel(env)
         conn   = get_integration_connection(tunnel, env)
         return tunnel, conn
+
+    @staticmethod
+    def _validate_identifiers(raw):
+        """validate_fn per _paste_popup: accetta solo identifier EB.../GB... alfanumerici."""
+        _fmt_hint   = "Formato atteso: EB... o GB... seguito da caratteri alfanumerici"
+        stripped    = [(i, line.strip()) for i, line in enumerate(raw) if line.strip()]
+        invalid_nos = [i + 1 for i, k in stripped if not _RE_IDENTIFIER.match(k)]
+        valid       = [k for i, k in stripped if _RE_IDENTIFIER.match(k)]
+        n           = len(invalid_nos)
+        error_msg   = (f"⚠  {n} {'identifier non valido' if n == 1 else 'identifier non validi'}.\n{_fmt_hint}"
+                       if invalid_nos else "")
+        return valid, invalid_nos, error_msg
+
+    def _save_tree_to_file(self, tree, file, label):
+        rows = [tree.item(iid, "values")[0]
+                for iid in tree.get_children()
+                if tree.item(iid, "values")]
+        try:
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text("\n".join(rows) + "\n" if rows else "", encoding="utf-8")
+            self._status_var.set(f"✓ {label} salvato ({len(rows)} righe).")
+        except Exception as e:
+            messagebox.showerror("Errore salvataggio", str(e))
 
     def _build_status_bar(self):
         self._status_var = tkinter.StringVar(value="Pronto.")
@@ -2387,6 +2410,9 @@ _ADE_QUERY_FLAGS = {
     "query_cheque_energie_kh.sql": "ADE_RUN_CHEQUE_ENERGIE_KH",
 }
 
+_ADE_DELTA_INVOICE_FLAG = "ADE_DELTA_INVOICE"
+_ADE_FULL_INPUT_FILE_IDENTIFIER = _HERE / "input" / "kraken full data extractor" / "data_input_invoice.txt"
+
 _ADE_QUERY_LABELS = {
     "query_customer.sql":     "Customer",
     "query_agreement.sql":    "Agreement",
@@ -2476,7 +2502,7 @@ def _ade_fmt_time(seconds: float) -> str:
     return f"~{h}h {m:02d}m {s:02d}s" if s else f"~{h}h {m:02d}m"
 
 
-def _ade_load_query(hub_conn, flow: str, date_filter: str = None):
+def _ade_load_query(hub_conn, flow: str, date_filter: str = None, identifiers: list = None):
     """
     Carica la query da hub_config_query_kraken.
     - date_filter=None  → rimuove il filtro DATETOINSERT (full load, tabella vuota)
@@ -2503,11 +2529,15 @@ def _ade_load_query(hub_conn, flow: str, date_filter: str = None):
             else:
                 stripped = l.lstrip()
                 if stripped.lower().startswith("and "):
-                    lines.append("    and 1=1")
+                    replacement = "    and 1=1"
                 elif stripped.lower().startswith("where "):
-                    lines.append("    where 1=1")
+                    replacement = "    where 1=1"
                 else:
-                    lines.append("    1=1")
+                    replacement = "    1=1"
+                if identifiers:
+                    ids_sql = ", ".join(f"'{i}'" for i in identifiers)
+                    replacement += f"\n    and document.identifier in ({ids_sql})"
+                lines.append(replacement)
         else:
             lines.append(l)
     return "\n".join(lines)
@@ -2906,8 +2936,13 @@ class KrakenFullDataExtractor(_AppBase):
 
     def _build_ui(self):
         self._build_status_bar()
+        self._build_notebook([
+            ("  ▶  Pipeline  ",    self._build_pipeline_tab),
+            ("  \U0001f4cb  Data Input  ", self._build_data_input_tab),
+        ])
 
-        body = Frame(self, bg=BG)
+    def _build_pipeline_tab(self, parent):
+        body = Frame(parent, bg=BG)
         body.pack(fill="both", expand=True, padx=24, pady=(12, 0))
 
         left_wrapper = Frame(body, bg=BG_CARD, bd=0, highlightthickness=1,
@@ -2919,20 +2954,43 @@ class KrakenFullDataExtractor(_AppBase):
         left = Frame(left_wrapper, bg=BG_CARD)
         left.pack(fill="both", expand=True)
 
-        hdr = Frame(left, bg=BG_CARD2)
-        hdr.pack(fill="x")
-        Label(hdr, text="▼", bg=BG_CARD2, fg=ACCENT,
-              font=("Consolas", 9)).pack(side="left", padx=(8, 4), pady=6)
-        Label(hdr, text="Tabelle", bg=BG_CARD2, fg=TEXT_PRI,
-              font=("Consolas", 10, "bold")).pack(side="left", pady=6)
-        Frame(left, bg=BORDER, height=1).pack(fill="x")
+        self._ade_accordion = []  # (content_frame, arrow_var)
+
+        def _make_accordion(title, default_open=True):
+            arrow_var  = tkinter.StringVar(value="▼" if default_open else "▶")
+            hdr_frame  = Frame(left, bg=BG_CARD2, cursor="hand2")
+            hdr_frame.pack(fill="x")
+            Label(hdr_frame, textvariable=arrow_var, bg=BG_CARD2, fg=ACCENT,
+                  font=("Consolas", 9)).pack(side="left", padx=(8, 4), pady=6)
+            Label(hdr_frame, text=title, bg=BG_CARD2, fg=TEXT_PRI,
+                  font=("Consolas", 10, "bold")).pack(side="left", pady=6)
+            Frame(left, bg=BORDER, height=1).pack(fill="x")
+            content = Frame(left, bg=BG_CARD)
+            if default_open:
+                content.pack(fill="x")
+            self._ade_accordion.append((content, arrow_var))
+
+            def _toggle(e=None):
+                for c, av in self._ade_accordion:
+                    if c is not content:
+                        c.pack_forget(); av.set("▶")
+                if not content.winfo_ismapped():
+                    content.pack(fill="x", after=hdr_frame); arrow_var.set("▼")
+
+            hdr_frame.bind("<Button-1>", _toggle)
+            for child in hdr_frame.winfo_children():
+                child.bind("<Button-1>", _toggle)
+            return content
+
+        # ── Sezione Full ──────────────────────────────────────────────────
+        full_content = _make_accordion("Full", default_open=True)
 
         for row_label, flows in _ADE_UI_ROWS:
             for flow in flows:
                 if flow not in self._flags:
                     self._flags[flow] = BooleanVar(value=False)
 
-            row = Frame(left, bg=BG_CARD)
+            row = Frame(full_content, bg=BG_CARD)
             row.pack(fill="x", padx=10, pady=2)
 
             init_val = self._flags[flows[0]].get()
@@ -2948,11 +3006,10 @@ class KrakenFullDataExtractor(_AppBase):
                         font=("Consolas", 10), anchor="w", cursor="hand2")
             lbl.pack(side="left", fill="x", expand=True)
 
-            # Label tempo stimato (a destra)
             time_var = tkinter.StringVar(value="")
             self._time_labels[row_label] = (time_var, flows)
             time_lbl = Label(row, textvariable=time_var, bg=BG_CARD, fg=TEXT_SEC,
-                  font=("Consolas", 8), anchor="e")
+                             font=("Consolas", 8), anchor="e")
             time_lbl.pack(side="right", padx=(0, 2))
             self._attach_tooltip(time_lbl, "Tempo stimato basato sull'ultima esecuzione")
 
@@ -2969,12 +3026,10 @@ class KrakenFullDataExtractor(_AppBase):
             box.bind("<Button-1>", tog)
             lbl.bind("<Button-1>", tog)
 
-        Frame(left, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(8, 0))
-
-        btn_frame = Frame(left, bg=BG_CARD)
-        btn_frame.pack(fill="x", padx=10, pady=(8, 4), side="bottom")
-
-        row_btn = Frame(btn_frame, bg=BG_CARD)
+        Frame(full_content, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(8, 0))
+        btn_full = Frame(full_content, bg=BG_CARD)
+        btn_full.pack(fill="x", padx=10, pady=(8, 8))
+        row_btn = Frame(btn_full, bg=BG_CARD)
         row_btn.pack(fill="x")
         self._btn = self._make_btn(row_btn, "▶  Avvia", self._start)
         self._btn.pack(side="left", fill="x", expand=True, padx=(0, 3))
@@ -2982,10 +3037,145 @@ class KrakenFullDataExtractor(_AppBase):
         self._btn_stop.pack(side="left", fill="x", expand=True, padx=(3, 0))
         self._btn_stop.configure(fg=TEXT_SEC, cursor="arrow")
 
+        # ── Sezione Delta ─────────────────────────────────────────────────
+        delta_content = _make_accordion("Delta", default_open=False)
+
+        self._delta_invoice_var = BooleanVar(value=False)
+        delta_row = Frame(delta_content, bg=BG_CARD)
+        delta_row.pack(fill="x", padx=10, pady=2)
+        delta_box = Label(delta_row, text="☐", bg=BG_CARD, fg=TEXT_SEC,
+                          font=("Consolas", 12), cursor="hand2", width=2)
+        delta_box.pack(side="left", padx=(0, 6))
+        self._delta_invoice_box = delta_box
+        delta_lbl = Label(delta_row, text="Invoice", bg=BG_CARD, fg=TEXT_PRI,
+                          font=("Consolas", 10), anchor="w", cursor="hand2")
+        delta_lbl.pack(side="left", fill="x", expand=True)
+
+        def _toggle_delta_invoice(e=None):
+            new_val = not self._delta_invoice_var.get()
+            self._delta_invoice_var.set(new_val)
+            delta_box.configure(text="☑" if new_val else "☐",
+                                fg=ACCENT if new_val else TEXT_SEC)
+            try:
+                _write_env({_ADE_DELTA_INVOICE_FLAG: "Y" if new_val else "N"})
+            except Exception:
+                pass
+        delta_box.bind("<Button-1>", _toggle_delta_invoice)
+        delta_lbl.bind("<Button-1>", _toggle_delta_invoice)
+
+        Frame(delta_content, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(8, 0))
+        btn_delta = Frame(delta_content, bg=BG_CARD)
+        btn_delta.pack(fill="x", padx=10, pady=(8, 8))
+        self._make_btn(btn_delta, "▶  Avvia",
+                       self._start_delta,
+                       color=ACCENT).pack(fill="x")
+
         right = Frame(body, bg=BG_CARD, bd=0, highlightthickness=1,
                       highlightbackground=BORDER)
         right.pack(side="left", fill="both", expand=True, padx=(10, 0))
         self._build_log_panel(right, on_clear=self._clear_log)
+
+    def _build_data_input_tab(self, parent):
+        style = ttk.Style()
+        style.configure("Mode.TNotebook",
+                        background=BG_CARD2, borderwidth=0, tabmargins=[0, 0, 0, 0])
+        style.configure("Mode.TNotebook.Tab",
+                        background=BG_CARD, foreground=TEXT_SEC,
+                        font=("Consolas", 9), padding=[12, 2], borderwidth=0)
+        style.map("Mode.TNotebook.Tab",
+                  background=[("selected", ACCENT2), ("!selected", BG_CARD)],
+                  foreground=[("selected", TEXT_PRI), ("!selected", TEXT_SEC)],
+                  padding=[("selected", [12, 5]), ("!selected", [12, 2])])
+        style.configure("Input.Treeview",
+                        background=BG_CARD, foreground=TEXT_PRI,
+                        fieldbackground=BG_CARD, rowheight=26,
+                        font=("Consolas", 10), borderwidth=0)
+        style.configure("Input.Treeview.Heading",
+                        background=BG_CARD2, foreground=ACCENT,
+                        font=("Consolas", 9, "bold"), relief="flat")
+        style.map("Input.Treeview",
+                  background=[("selected", ACCENT2)],
+                  foreground=[("selected", TEXT_PRI)])
+
+        mode_nb = ttk.Notebook(parent, style="Mode.TNotebook")
+        mode_nb.pack(fill="both", expand=True)
+
+        tab_id = Frame(mode_nb, bg=BG)
+        mode_nb.add(tab_id, text="  Invoice  ")
+
+        # ── Invoice ───────────────────────────────────────────────────────
+        hdr = Frame(tab_id, bg=BG)
+        hdr.pack(fill="x", padx=16, pady=(12, 0))
+        Label(hdr, text="Data Input  —  Invoice", bg=BG, fg=TEXT_PRI,
+              font=("Consolas", 11, "bold")).pack(side="left")
+        Frame(tab_id, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(8, 0))
+        Label(tab_id, text="Ogni riga rappresenta un document identifier invoice da processare.",
+              bg=BG, fg=TEXT_SEC, font=("Consolas", 9), anchor="w", pady=6).pack(fill="x", padx=16)
+
+        toolbar = Frame(tab_id, bg=BG)
+        toolbar.pack(fill="x", padx=16, pady=(0, 6))
+        self._make_btn(toolbar, "✏️  Modifica / Aggiungi",
+                       self._ade_identifier_paste_popup, color=SUCCESS).pack(side="left", padx=(0, 6))
+        self._make_btn(toolbar, "🗑  Svuota righe",
+                       self._ade_identifier_clear_all, color=ERROR).pack(side="left")
+
+        table_frame = Frame(tab_id, bg=BG_CARD,
+                            highlightthickness=1, highlightbackground=BORDER)
+        table_frame.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+
+        self._ade_id_tree = ttk.Treeview(table_frame, columns=("identifier",),
+                                         show="headings", style="Input.Treeview",
+                                         selectmode="browse")
+        self._ade_id_tree.heading("identifier", text="Document Identifier Invoice")
+        self._ade_id_tree.column("identifier", width=500, minwidth=200, anchor="w")
+
+        vsb = ttk.Scrollbar(table_frame, orient="vertical",
+                            command=self._ade_id_tree.yview,
+                            style="Dark.Vertical.TScrollbar")
+        def _id_scroll(f, l):
+            if float(f) <= 0.0 and float(l) >= 1.0:
+                if vsb.winfo_ismapped(): vsb.after(1, vsb.pack_forget)
+            else:
+                if not vsb.winfo_ismapped():
+                    vsb.after(1, lambda: vsb.pack(side="right", fill="y", before=self._ade_id_tree))
+            vsb.set(f, l)
+        vsb.pack(side="right", fill="y")
+        self._ade_id_tree.configure(yscrollcommand=_id_scroll)
+        self._ade_id_tree.pack(fill="both", expand=True)
+
+        footer = Frame(tab_id, bg=BG)
+        footer.pack(fill="x", padx=16, pady=(0, 4))
+        self._ade_id_count_var = tkinter.StringVar(value="")
+        Label(footer, textvariable=self._ade_id_count_var,
+              bg=BG, fg=TEXT_SEC, font=("Consolas", 9)).pack(side="left")
+
+        self._load_filter_from_file(self._ade_id_tree,
+                                    _ADE_FULL_INPUT_FILE_IDENTIFIER,
+                                    self._ade_id_count_var)
+
+    def _ade_identifier_paste_popup(self):
+        self._paste_popup(
+            title="Modifica / Aggiungi identifier invoice",
+            subtitle="Una riga per identifier (EB.../GB...). Righe vuote verranno ignorate.",
+            tree=self._ade_id_tree, count_var=self._ade_id_count_var,
+            empty_warning="⚠  Nessun identifier trovato.",
+            count_label_fn=lambda n: f"{n} identifier.",
+            save_fn=self._ade_save_identifier_input,
+            validate_fn=self._validate_identifiers,
+        )
+
+    def _ade_identifier_clear_all(self):
+        if not self._ade_id_tree.get_children():
+            return
+        if messagebox.askyesno("Svuota righe", "Sei sicuro di voler rimuovere tutti gli identifier invoice?"):
+            self._ade_id_tree.delete(*self._ade_id_tree.get_children())
+            self._ade_id_count_var.set("0 identifier.")
+            self._ade_save_identifier_input()
+
+    def _ade_save_identifier_input(self):
+        self._save_tree_to_file(self._ade_id_tree,
+                                _ADE_FULL_INPUT_FILE_IDENTIFIER,
+                                "data_input_invoice.txt")
 
     def _load_flags(self):
         data = _read_env_raw()
@@ -2996,6 +3186,13 @@ class KrakenFullDataExtractor(_AppBase):
             if box:
                 box.configure(text="☑" if val else "☐",
                               fg=ACCENT if val else TEXT_SEC)
+        # Flag Delta Invoice
+        delta_val = data.get(_ADE_DELTA_INVOICE_FLAG, "N").strip().upper() == "Y"
+        self._delta_invoice_var.set(delta_val)
+        if hasattr(self, "_delta_invoice_box"):
+            self._delta_invoice_box.configure(
+                text="☑" if delta_val else "☐",
+                fg=ACCENT if delta_val else TEXT_SEC)
 
     def _load_time_labels(self):
         """Legge i tempi salvati nel .env e aggiorna le label di previsione."""
@@ -3054,9 +3251,146 @@ class KrakenFullDataExtractor(_AppBase):
         flags = {flow: var.get() for flow, var in self._flags.items()}
         threading.Thread(
             target=run_ade_pipeline,
-            args=(flags, self._enqueue_log, self._on_done_with_stop, self),
+            args=(flags, self._enqueue_log, self._on_done, self),
             daemon=True,
         ).start()
+
+    def _start_delta(self):
+        if self._running:
+            return
+        identifiers = [
+            self._ade_id_tree.item(iid, "values")[0]
+            for iid in self._ade_id_tree.get_children()
+            if self._ade_id_tree.item(iid, "values")
+        ]
+        if not identifiers:
+            self._status_var.set("⚠ Nessun identifier in Data Input.")
+            return
+        self._running        = True
+        self._stop_requested = False
+        self._status_var.set("Delta in esecuzione...")
+        threading.Thread(
+            target=self._run_delta_pipeline,
+            args=(identifiers,),
+            daemon=True,
+        ).start()
+
+    def _run_delta_pipeline(self, identifiers: list):
+        import time as _time
+        import psycopg2 as _pg2
+        log = self._enqueue_log
+        t_total = _time.time()
+
+        _DELTA_FLOWS = ["query_invoice_elec.sql", "query_invoice_gas.sql"]
+        _DELTA_TABLES = {
+            "query_invoice_elec.sql": "j_kraken_invoice",
+            "query_invoice_gas.sql":  "j_kraken_invoice",
+        }
+
+        try:
+            log(f"\n[INFO] ── Delta Invoice — {len(identifiers)} identifier ──", "section")
+            log(f"[INFO] Connessione HUB: {os.getenv('HUB_HOST')} / {os.getenv('HUB_NAME')} ...", "info")
+            hub_conn = get_hub_connection()
+            log("[OK] Connessione HUB attiva ✓", "ok")
+
+            kraken_conn = _ade_get_kraken_connection()
+            log("[OK] Connessione Kraken attiva ✓", "ok")
+
+            # 1. DELETE per identifier da j_kraken_invoice
+            log(f"[INFO] DELETE da j_kraken_invoice per {len(identifiers)} identifier ...", "info")
+            try:
+                cur = hub_conn.cursor()
+                cur.execute(
+                    "DELETE FROM j_kraken_invoice WHERE identifier = ANY(%s)",
+                    (identifiers,)
+                )
+                deleted = cur.rowcount
+                hub_conn.commit(); cur.close()
+                log(f"[OK] Eliminati {deleted} record ✓", "ok")
+            except Exception as e:
+                hub_conn.rollback()
+                log(f"[ERRORE] DELETE fallito: {e}", "error")
+                hub_conn.close(); kraken_conn.close()
+                self.after(0, lambda: self._on_delta_done(False)); return
+
+            # 2. Ricarica da Kraken con filtro identifier
+            BATCH_SIZE = 10_000
+            for flow in _DELTA_FLOWS:
+                if self._stop_requested:
+                    log("[STOP] Interruzione richiesta.", "warn"); break
+
+                lbl   = _ADE_QUERY_LABELS[flow]
+                table = _DELTA_TABLES[flow]
+                log(f"\n── {lbl}  [DELTA] ──", "section")
+
+                query = _ade_load_query(hub_conn, flow, date_filter=None, identifiers=identifiers)
+                if query is None:
+                    log(f"[ERRORE] Query non trovata per '{lbl}'.", "error"); continue
+                log(f"[OK] Query {_ADE_HUB_META_QUERIES.get(flow, flow)} recuperata da HUB PROD.", "ok")
+
+                t_start = _time.time()
+                stop_hb = threading.Event()
+                def _heartbeat(label=lbl, t0=t_start, stop=stop_hb):
+                    while not stop.wait(60):
+                        elapsed = _time.time() - t0
+                        log(f"⏳ {label} — in esecuzione... ({_ade_fmt_time(elapsed)})", "info")
+                threading.Thread(target=_heartbeat, daemon=True).start()
+
+                cur_name = f"ade_delta_{flow.replace('.', '_')}_{int(t_start)}"
+                cur = kraken_conn.cursor(cur_name)
+                cur.itersize = BATCH_SIZE
+                total_rows = 0
+                try:
+                    cur.execute(query)
+                    first_batch = cur.fetchmany(BATCH_SIZE)
+                    columns = [d[0] for d in cur.description]
+                    if flow == "query_invoice_elec.sql":
+                        columns = ["supply_point" if c == "prm" else c for c in columns]
+                    elif flow == "query_invoice_gas.sql":
+                        columns = ["supply_point" if c == "pce" else c for c in columns]
+
+                    batch_iter = [first_batch] if first_batch else []
+                    while True:
+                        if batch_iter:
+                            batch = batch_iter.pop(0)
+                        else:
+                            if self._stop_requested: break
+                            batch = cur.fetchmany(BATCH_SIZE)
+                        if not batch: break
+                        batch = normalize_timestamps(batch)
+                        hub_cur = hub_conn.cursor()
+                        try:
+                            bulk_insert(hub_cur, table, columns, batch)
+                            hub_conn.commit(); hub_cur.close()
+                            total_rows += len(batch)
+                        except Exception as e:
+                            hub_conn.rollback(); hub_cur.close()
+                            log(f"[ERRORE] Insert batch fallito: {e}", "error"); break
+                    cur.close()
+                except Exception as e:
+                    stop_hb.set()
+                    try: cur.close()
+                    except Exception: pass
+                    log(f"[ERRORE] Esecuzione query '{lbl}' fallita: {e}", "error"); continue
+                finally:
+                    stop_hb.set()
+
+                dur = _ade_fmt_time(_time.time() - t_start)
+                log(f"[OK] {total_rows} righe inserite in {dur} ✓", "ok")
+
+            hub_conn.close(); kraken_conn.close()
+            _m, _s = divmod(int(_time.time() - t_total), 60)
+            _dur = f"{_m}m {_s}s" if _m else f"{_s}s"
+            log(f"\n[INFO] Delta completato in {_dur} — SUCCESSO", "ok")
+            self.after(0, lambda: self._on_delta_done(True))
+
+        except Exception as e:
+            log(f"\n[ERRORE CRITICO] {e}", "error")
+            self.after(0, lambda: self._on_delta_done(False))
+
+    def _on_delta_done(self, success: bool):
+        self._running = False
+        self._status_var.set("✓ Delta completato." if success else "✗ Delta errore.")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -3775,11 +4109,12 @@ class KrakenDataExtractor(_AppBase):
     def _identifier_paste_popup(self):
         self._paste_popup(
             title="Modifica / Aggiungi identifier",
-            subtitle="Una riga per identifier. Righe vuote verranno ignorate.",
+            subtitle="Una riga per identifier (EB.../GB...). Righe vuote verranno ignorate.",
             tree=self._id_tree, count_var=self._id_count_var,
             empty_warning="⚠  Nessun identifier trovato.",
             count_label_fn=lambda n: f"{n} identifier.",
             save_fn=self._save_identifier_input,
+            validate_fn=self._validate_identifiers,
         )
 
     def _input_paste_popup(self):
@@ -5269,7 +5604,7 @@ class QuadraturaHubSap(_AppBase):
     # \u2500\u2500 Tab Pipeline \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     def _build_pipeline_tab(self, parent):
-        left, right = self._build_panel_layout(parent, left_width=280)
+        left, right = self._build_panel_layout(parent, left_width=200)
 
         hdr_left = Frame(left, bg=BG_CARD2)
         hdr_left.pack(fill="x")
@@ -5294,7 +5629,7 @@ class QuadraturaHubSap(_AppBase):
             box.pack(side="left", padx=(0, 6))
             lbl = Label(row, text=label_text, bg=BG_CARD, fg=TEXT_PRI,
                         font=("Consolas", 10), cursor="hand2",
-                        wraplength=220, justify="left")
+                        wraplength=140, justify="left")
             lbl.pack(side="left")
 
             def _toggle(e=None):
@@ -5678,11 +6013,13 @@ class QuadraturaHubSap(_AppBase):
                         idx_errors += 1
 
                 elapsed_mode = time.time() - t_mode
+                _mm, _ss = divmod(int(elapsed_mode), 60)
+                _dur_mode = f"{_mm}m {_ss}s" if _mm else f"{_ss}s"
                 if idx_errors:
-                    log(f"[WARN] Modalità '{mode_label}' completata con {idx_errors} errori in {elapsed_mode:.1f}s", "warn")
+                    log(f"[WARN] Modalità '{mode_label}' completata con {idx_errors} errori in {_dur_mode}", "warn")
                     success = False
                 else:
-                    log(f"[OK] Modalità '{mode_label}' completata in {elapsed_mode:.1f}s ✓", "ok")
+                    log(f"[OK] Modalità '{mode_label}' completata in {_dur_mode} ✓", "ok")
 
             hub_conn.close()
 
@@ -5691,7 +6028,9 @@ class QuadraturaHubSap(_AppBase):
             success = False
         finally:
             elapsed_total = time.time() - t_total
-            log(f"\n[INFO] Pipeline terminata in {elapsed_total:.1f}s — "
+            _m, _s = divmod(int(elapsed_total), 60)
+            _dur = f"{_m}m {_s}s" if _m else f"{_s}s"
+            log(f"\n[INFO] Pipeline terminata in {_dur} — "
                 f"{'SUCCESSO' if success else 'CON ERRORI'}", "ok" if success else "error")
             self.after(0, lambda s=success: self._on_done(s))
 
@@ -8876,15 +9215,6 @@ class FileFilter(_AppBase):
                 save_fn=lambda: self._save_inv_filter_for(attr_tree, filter_file))
             return
 
-        def _validate(raw):
-            _fmt_hint = "Formato atteso: EB... o GB... seguito da caratteri alfanumerici"
-            stripped = [(i, line.strip()) for i, line in enumerate(raw) if line.strip()]
-            invalid_nos = [i + 1 for i, k in stripped if not _RE_IDENTIFIER.match(k)]
-            valid = [k for i, k in stripped if _RE_IDENTIFIER.match(k)]
-            n = len(invalid_nos)
-            error_msg = f"⚠  {n} {'chiave non valida' if n == 1 else 'chiavi non valide'}.\n{_fmt_hint}" if invalid_nos else ""
-            return valid, invalid_nos, error_msg
-
         self._paste_popup(
             title="Modifica / Aggiungi — Identifier",
             subtitle="Una chiave per riga. Righe vuote verranno ignorate.",
@@ -8892,7 +9222,7 @@ class FileFilter(_AppBase):
             empty_warning="⚠  Nessuna chiave trovata.",
             count_label_fn=lambda n: f"{n} chiavi.",
             save_fn=lambda: self._save_inv_filter_for(attr_tree, filter_file),
-            validate_fn=_validate,
+            validate_fn=self._validate_identifiers,
         )
 
     def _inv_filter_clear(self, mode):
