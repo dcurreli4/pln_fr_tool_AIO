@@ -1,3 +1,10 @@
+### v1.7.0 — 2026-09-11
+- **Quadratura HUB-SAP**: nuova sezione con 3 modalità (Creazione plan HUB, Creazione plan SAP, Quadratura HUB-SAP) — pipeline DROP CASCADE → CREATE MATERIALIZED VIEW → CREATE INDEX su HUB prod; no slider ambiente (sempre prod)
+- **Quadratura HUB-SAP — Input Tables**: tab per upload CSV su tabelle `dfkkop`, `afb`, `z_invoice_sap_per_quadratura` — drop zone + picklist tabella, validazione colonne case-insensitive, caricamento chunked (50k righe), supporto ZIP, skip righe vuote iniziali
+- **Input Tables**: fix COPY — nomi colonna ora lowercase indipendentemente dal casing dell'intestazione CSV (`"PRM"` → `prm`)
+- **Input Tables**: commento tabella aggiornato dopo ogni caricamento (`Last load`, `Duration`, `Rows`) — visibile in DBeaver e mostrato a destra della picklist nella UI
+- **Input Tables**: log progresso ogni 500k righe (era ogni 50k) — sempre loggato almeno una volta a fine caricamento
+
 ### v1.6.21 — 2026-09-08
 - **Changelog**: stesso renderer dell'About — card per versione, `Label` con `wraplength` dinamico anti-loop, supporto `**bold**`
 - **About / Changelog**: fix wraplength con `_last_w` — evita loop infinito su `<Configure>`

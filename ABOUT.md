@@ -64,6 +64,30 @@ Dopo ogni esecuzione i tempi per flow vengono salvati nel .env (chiavi ADE_TIME_
 ### Connessioni
 Usa le stesse credenziali HUB e Kraken già configurate. Le connessioni hanno TCP keepalive abilitato (idle 60s) per reggere query che durano oltre un'ora. Reconnect automatico se la connessione HUB cade durante il fetch. Il commento di ogni tabella viene aggiornato con la data dell'ultima estrazione riuscita.
 
+## 🔢 Quadratura HUB-SAP
+
+### Cosa fa
+Gestisce la pipeline di quadratura tra i dati HUB e SAP. Tutte le operazioni vengono eseguite sempre su HUB Produzione (nessun selettore ambiente).
+
+### Modalità operative
+**Creazione plan HUB** — Esegue DROP CASCADE delle view esistenti, ricrea le materialized view e ricrea gli indici su HUB Prod.
+
+**Creazione plan SAP** — Stessa logica di DROP CASCADE → CREATE MATERIALIZED VIEW → CREATE INDEX per le view lato SAP.
+
+**Quadratura HUB-SAP** — Esegue la quadratura incrociata tra i dati HUB e SAP.
+
+### Tab Input Tables
+Permette di caricare file CSV (o ZIP contenente un CSV) nelle tabelle di staging: `dfkkop`, `afb`, `z_invoice_sap_per_quadratura`. Funzionalità:
+- Drop zone + picklist per selezionare la tabella target
+- Validazione colonne CSV case-insensitive prima del caricamento
+- TRUNCATE automatico prima dell'upload
+- Caricamento chunked (50.000 righe per chunk) con log progresso ogni 500.000 righe
+- Skip automatico delle righe vuote iniziali (la prima riga non vuota viene trattata come header)
+- Dopo il caricamento salva un commento sulla tabella con data, durata e numero righe — visibile a destra della picklist
+
+### Tab Indexes
+Le query SQL per la creazione degli indici sono configurabili e modificabili direttamente dall'interfaccia, salvate in `input/quadratura hub-sap/indexes/`.
+
 ## ⚡ Delta Recovery
 
 ### Cosa fa

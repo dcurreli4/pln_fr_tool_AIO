@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.6.21"
+VERSION_LAUNCHER = "1.7.0"
 
 
 _REQUIRED = {
@@ -890,11 +890,12 @@ class _AppBase(tkinter.Frame):
         self._btn.configure(fg=color, cursor="hand2")
         self.after(3000, lambda: self._btn.configure(fg=ACCENT))
 
-    def _attach_tooltip(self, widget, text: str):
+    def _attach_tooltip(self, widget, text: str, delay: int = 600):
         """Mostra un piccolo tooltip scuro al passaggio del mouse sul widget."""
-        tip = [None]
+        tip      = [None]
+        after_id = [None]
 
-        def _show(e):
+        def _show_now():
             if tip[0]:
                 return
             x = widget.winfo_rootx() + widget.winfo_width() // 2
@@ -908,7 +909,13 @@ class _AppBase(tkinter.Frame):
                           relief="flat").pack()
             tip[0] = tw
 
+        def _show(e):
+            after_id[0] = widget.after(delay, _show_now)
+
         def _hide(e):
+            if after_id[0]:
+                widget.after_cancel(after_id[0])
+                after_id[0] = None
             if tip[0]:
                 tip[0].destroy()
                 tip[0] = None
@@ -5199,6 +5206,927 @@ class DeltaRecovery(_AppBase):
 
 
 
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# QUADRATURA HUB-SAP
+# ════════════════════════════════════════════════════════════════════════════
+
+_QHS_QUERIES_DIR = _HERE / "input" / "quadratura hub-sap" / "queries"
+
+_QHS_MODES = [
+    ("QHS_CREAZIONE_PLAN_HUB",  "Creazione plan HUB"),
+    ("QHS_CREAZIONE_PLAN_SAP",  "Creazione plan SAP"),
+    ("QHS_QUADRATURA",          "Quadratura HUB-SAP"),
+]
+
+_QHS_SQL_FILES = {
+    "QHS_CREAZIONE_PLAN_HUB": _QHS_QUERIES_DIR / "creazione_plan_hub.sql",
+    "QHS_CREAZIONE_PLAN_SAP": _QHS_QUERIES_DIR / "creazione_plan_sap.sql",
+    "QHS_QUADRATURA":         _QHS_QUERIES_DIR / "quadratura_hub_sap.sql",
+}
+
+_QHS_INDICES_DIR = _HERE / "input" / "quadratura hub-sap" / "indexes"
+
+_QHS_INDEX_FILES = {
+    "QHS_CREAZIONE_PLAN_HUB": _QHS_INDICES_DIR / "creazione_plan_hub.sql",
+    "QHS_CREAZIONE_PLAN_SAP": _QHS_INDICES_DIR / "creazione_plan_sap.sql",
+    "QHS_QUADRATURA":         _QHS_INDICES_DIR / "quadratura_hub_sap.sql",
+}
+
+
+def _qhs_load_query(mode_key: str) -> str:
+    sql_path = _QHS_SQL_FILES.get(mode_key)
+    if sql_path and sql_path.exists():
+        return sql_path.read_text(encoding="utf-8").strip()
+    return ""
+
+
+def _qhs_save_query(mode_key: str, text: str):
+    sql_path = _QHS_SQL_FILES[mode_key]
+    sql_path.parent.mkdir(parents=True, exist_ok=True)
+    sql_path.write_text(text.strip() + "\n", encoding="utf-8")
+
+
+class QuadraturaHubSap(_AppBase):
+    def __init__(self, master):
+        super().__init__(master, bg=BG)
+        self._log_queue: queue.Queue = queue.Queue()
+        self._running        = False
+        self._stop_requested = False
+        self._build_ui()
+        self._poll_log()
+
+    def _build_ui(self):
+        self._build_status_bar()
+        self._build_notebook([
+            ("  \u25b6  Pipeline  ",       self._build_pipeline_tab),
+            ("  \u2b06  Input Tables  ",   self._build_csv_tab),
+            ("  \u270e  Query  ",          self._build_query_tab),
+            ("  \u2261  Indici  ",         self._build_indices_tab),
+        ])
+
+    # \u2500\u2500 Tab Pipeline \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    def _build_pipeline_tab(self, parent):
+        left, right = self._build_panel_layout(parent, left_width=280)
+
+        hdr_left = Frame(left, bg=BG_CARD2)
+        hdr_left.pack(fill="x")
+        Label(hdr_left, text="Modalit\u00e0", bg=BG_CARD2, fg=TEXT_PRI,
+              font=("Consolas", 9, "bold"), padx=14, pady=10,
+              anchor="w").pack(fill="x")
+        Frame(left, bg=BORDER, height=1).pack(fill="x")
+
+        self._qhs_mode_vars = {}
+        for env_key, _ in _QHS_MODES:
+            self._qhs_mode_vars[env_key] = tkinter.BooleanVar(value=False)
+
+        _FLAG_MAP = {id(var): env_key for env_key, var in
+                     ((ek, self._qhs_mode_vars[ek]) for ek, _ in _QHS_MODES)}
+
+        def _make_row_check(par, var, label_text):
+            row = Frame(par, bg=BG_CARD)
+            row.pack(fill="x", padx=14, pady=3)
+            box = Label(row, text="\u2611" if var.get() else "\u2610",
+                        bg=BG_CARD, fg=ACCENT if var.get() else TEXT_SEC,
+                        font=("Consolas", 12), cursor="hand2", width=2)
+            box.pack(side="left", padx=(0, 6))
+            lbl = Label(row, text=label_text, bg=BG_CARD, fg=TEXT_PRI,
+                        font=("Consolas", 10), cursor="hand2",
+                        wraplength=220, justify="left")
+            lbl.pack(side="left")
+
+            def _toggle(e=None):
+                var.set(not var.get())
+                box.configure(text="\u2611" if var.get() else "\u2610",
+                              fg=ACCENT if var.get() else TEXT_SEC)
+
+            box.bind("<Button-1>", _toggle)
+            lbl.bind("<Button-1>", _toggle)
+            row.bind("<Button-1>", _toggle)
+
+        for env_key, label_text in _QHS_MODES:
+            _make_row_check(left, self._qhs_mode_vars[env_key], label_text)
+
+        Frame(left, bg=BORDER, height=1).pack(fill="x", padx=14, pady=(8, 0))
+
+        btn_frame = Frame(left, bg=BG_CARD)
+        btn_frame.pack(fill="x", padx=14, pady=12, side="bottom")
+
+        row1 = Frame(btn_frame, bg=BG_CARD)
+        row1.pack(fill="x", side="bottom")
+
+        self._qhs_btn = self._make_btn(row1, "\u25b6  Avvia", self._start)
+        self._qhs_btn.pack(side="left", fill="x", expand=True, padx=(0, 3))
+
+        self._qhs_btn_stop = self._make_btn(row1, "\u25a0  Stop", self._stop, color=ERROR)
+        self._qhs_btn_stop.pack(side="left", fill="x", expand=True, padx=(3, 0))
+        self._qhs_btn_stop.configure(fg=TEXT_SEC, cursor="arrow")
+
+        self._build_log_panel(right, on_clear=self._clear_log)
+
+    # \u2500\u2500 Tab Query \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\r
+
+    def _build_query_tab(self, parent):
+        self._qhs_query_editors = {}
+
+        inner_nb = ttk.Notebook(parent, style="Dark.TNotebook")
+        inner_nb.pack(fill="both", expand=True, padx=16, pady=12)
+
+        for env_key, label_text in _QHS_MODES:
+            tab = Frame(inner_nb, bg=BG)
+            inner_nb.add(tab, text=f"  {label_text}  ")
+
+            body = Frame(tab, bg=BG)
+            body.pack(fill="both", expand=True, padx=16, pady=(12, 0))
+
+            Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 8))
+
+            editor_frame = Frame(body, bg=BG_INPUT, highlightthickness=1,
+                                 highlightbackground=BORDER)
+            editor_frame.pack(fill="both", expand=True)
+
+            editor_scroll_y = ttk.Scrollbar(editor_frame,
+                                        style="Dark.Vertical.TScrollbar")
+            editor_scroll_x = ttk.Scrollbar(editor_frame, orient="horizontal",
+                                        style="Dark.Horizontal.TScrollbar")
+            editor_scroll_y.pack(side="right", fill="y")
+            editor_scroll_x.pack(side="bottom", fill="x")
+
+            editor = Text(editor_frame, bg=BG_INPUT, fg=TEXT_PRI,
+                          font=("Consolas", 10), relief="flat", bd=0,
+                          wrap="none", padx=10, pady=8,
+                          insertbackground=ACCENT, selectbackground=ACCENT2)
+            editor.pack(fill="both", expand=True)
+
+            def _make_yscroll(sy, ed):
+                def _ys(f, l):
+                    if float(f) <= 0.0 and float(l) >= 1.0:
+                        if sy.winfo_ismapped(): sy.pack_forget()
+                    else:
+                        if not sy.winfo_ismapped():
+                            sy.pack(side="right", fill="y", before=ed)
+                    sy.set(f, l)
+                return _ys
+
+            def _make_xscroll(sx, ed):
+                def _xs(f, l):
+                    if float(f) <= 0.0 and float(l) >= 1.0:
+                        if sx.winfo_ismapped(): sx.pack_forget()
+                    else:
+                        if not sx.winfo_ismapped():
+                            sx.pack(side="bottom", fill="x", before=ed)
+                    sx.set(f, l)
+                return _xs
+
+            editor.configure(yscrollcommand=_make_yscroll(editor_scroll_y, editor),
+                             xscrollcommand=_make_xscroll(editor_scroll_x, editor))
+            editor_scroll_y.config(command=editor.yview)
+            editor_scroll_x.config(command=editor.xview)
+
+            editor.insert("1.0", _qhs_load_query(env_key))
+            self._qhs_query_editors[env_key] = editor
+
+            bar = Frame(body, bg=BG)
+            bar.pack(fill="x", pady=(8, 0))
+
+            status_var = StringVar(value="")
+            status_lbl = Label(bar, textvariable=status_var, bg=BG, fg=TEXT_SEC,
+                               font=("Consolas", 8), anchor="w")
+            status_lbl.pack(side="left", fill="x", expand=True)
+
+            def _make_validate_and_save(ek=env_key, ed=editor, sv=status_var, sl=status_lbl):
+                def _run_vs():
+                    text = ed.get("1.0", "end-1c").strip()
+                    if not text:
+                        sv.set("\u26a0 Query vuota.")
+                        sl.configure(fg=WARNING)
+                        return
+                    sv.set("\u23f3 Validazione in corso ...")
+                    sl.configure(fg=TEXT_SEC)
+                    self.update()
+                    def _run():
+                        try:
+                            conn = get_hub_connection()
+                            cur  = conn.cursor()
+                            cur.execute(f"SELECT * FROM ({text}) AS _q LIMIT 0")
+                            cur.close()
+                            conn.close()
+                            try:
+                                _qhs_save_query(ek, text)
+                                self.after(0, lambda: (
+                                    sv.set(f"\u2713 Valida e salvata \u2014 {_QHS_SQL_FILES[ek].name}"),
+                                    sl.configure(fg=SUCCESS)))
+                                self.after(3000, lambda: (sv.set(""), sl.configure(fg=TEXT_SEC)))
+                            except Exception as ex:
+                                self.after(0, lambda e=ex: (
+                                    sv.set(f"\u2717 Errore salvataggio: {e}"),
+                                    sl.configure(fg=ERROR)))
+                        except Exception as ex:
+                            msg = str(ex).splitlines()[0]
+                            self.after(0, lambda m=msg: (
+                                sv.set(f"\u2717 {m}"),
+                                sl.configure(fg=ERROR)))
+                    threading.Thread(target=_run, daemon=True).start()
+                return _run_vs
+
+            self._make_btn(bar, "\u2714  Valida e salva", _make_validate_and_save(), color=ACCENT).pack(side="right")
+
+    # \u2500\u2500 Tab Indici \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    def _build_indices_tab(self, parent):
+        self._qhs_index_editors = {}
+
+        inner_nb = ttk.Notebook(parent, style="Dark.TNotebook")
+        inner_nb.pack(fill="both", expand=True, padx=16, pady=12)
+
+        for env_key, label_text in _QHS_MODES:
+            tab = Frame(inner_nb, bg=BG)
+            inner_nb.add(tab, text=f"  {label_text}  ")
+
+            body = Frame(tab, bg=BG)
+            body.pack(fill="both", expand=True, padx=16, pady=(12, 0))
+
+            Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(0, 8))
+
+            editor_frame = Frame(body, bg=BG_INPUT, highlightthickness=1,
+                                 highlightbackground=BORDER)
+            editor_frame.pack(fill="both", expand=True)
+
+            editor_scroll_y = ttk.Scrollbar(editor_frame,
+                                        style="Dark.Vertical.TScrollbar")
+            editor_scroll_x = ttk.Scrollbar(editor_frame, orient="horizontal",
+                                        style="Dark.Horizontal.TScrollbar")
+            editor_scroll_y.pack(side="right", fill="y")
+            editor_scroll_x.pack(side="bottom", fill="x")
+
+            editor = Text(editor_frame, bg=BG_INPUT, fg=TEXT_PRI,
+                          font=("Consolas", 10), relief="flat", bd=0,
+                          wrap="none", padx=10, pady=8,
+                          insertbackground=ACCENT, selectbackground=ACCENT2)
+            editor.pack(fill="both", expand=True)
+
+            def _make_yscroll(sy, ed):
+                def _ys(f, l):
+                    if float(f) <= 0.0 and float(l) >= 1.0:
+                        if sy.winfo_ismapped(): sy.pack_forget()
+                    else:
+                        if not sy.winfo_ismapped():
+                            sy.pack(side="right", fill="y", before=ed)
+                    sy.set(f, l)
+                return _ys
+
+            def _make_xscroll(sx, ed):
+                def _xs(f, l):
+                    if float(f) <= 0.0 and float(l) >= 1.0:
+                        if sx.winfo_ismapped(): sx.pack_forget()
+                    else:
+                        if not sx.winfo_ismapped():
+                            sx.pack(side="bottom", fill="x", before=ed)
+                    sx.set(f, l)
+                return _xs
+
+            editor.configure(yscrollcommand=_make_yscroll(editor_scroll_y, editor),
+                             xscrollcommand=_make_xscroll(editor_scroll_x, editor))
+            editor_scroll_y.config(command=editor.yview)
+            editor_scroll_x.config(command=editor.xview)
+
+            sql_path = _QHS_INDEX_FILES[env_key]
+            if sql_path.exists():
+                editor.insert("1.0", sql_path.read_text(encoding="utf-8").strip())
+            self._qhs_index_editors[env_key] = editor
+
+            bar = Frame(body, bg=BG)
+            bar.pack(fill="x", pady=(8, 0))
+
+            status_var = StringVar(value="")
+            status_lbl = Label(bar, textvariable=status_var, bg=BG, fg=TEXT_SEC,
+                               font=("Consolas", 8), anchor="w")
+            status_lbl.pack(side="left", fill="x", expand=True)
+
+            def _make_save(ek=env_key, ed=editor, sv=status_var, sl=status_lbl):
+                def _run_save():
+                    text = ed.get("1.0", "end-1c").strip()
+                    if not text:
+                        sv.set("\u26a0 Nessun indice da salvare.")
+                        sl.configure(fg=WARNING)
+                        return
+                    try:
+                        sql_p = _QHS_INDEX_FILES[ek]
+                        sql_p.parent.mkdir(parents=True, exist_ok=True)
+                        sql_p.write_text(text.strip() + "\n", encoding="utf-8")
+                        sv.set(f"\u2713 Salvato \u2014 {sql_p.name}")
+                        sl.configure(fg=SUCCESS)
+                        self.after(3000, lambda: (sv.set(""), sl.configure(fg=TEXT_SEC)))
+                    except Exception as ex:
+                        sv.set(f"\u2717 Errore: {ex}")
+                        sl.configure(fg=ERROR)
+                return _run_save
+
+            self._make_btn(bar, "\u2714  Salva", _make_save(), color=ACCENT).pack(side="right")
+
+    # \u2500\u2500 Avvia / Stop \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    def _start(self):
+        if self._running:
+            return
+        if not any(var.get() for var in self._qhs_mode_vars.values()):
+            self._status_var.set("\u26a0 Seleziona almeno una modalit\u00e0.")
+            return
+        self._running        = True
+        self._stop_requested = False
+        self._qhs_btn.configure(fg=TEXT_SEC, cursor="arrow")
+        self._qhs_btn_stop.configure(fg=ERROR, cursor="hand2")
+        self._status_var.set("In esecuzione ...")
+        threading.Thread(target=self._run_pipeline, daemon=True).start()
+
+    def _stop(self):
+        if self._running:
+            self._stop_requested = True
+            self._status_var.set("Stop richiesto ...")
+
+    def _run_pipeline(self):
+        import re
+        import time
+        import psycopg2
+
+        log     = self._enqueue_log
+        success = True
+
+        active_modes = [(k, label) for k, label in _QHS_MODES
+                        if self._qhs_mode_vars[k].get()]
+
+        log(f"[INFO] Avvio pipeline — {len(active_modes)} modalità attive", "info")
+        t_total = time.time()
+
+        try:
+            log(f"[INFO] Connessione HUB: {os.getenv('HUB_HOST')} / {os.getenv('HUB_NAME')} ...", "info")
+            try:
+                hub_conn = get_hub_connection()
+                log("[OK] Connessione HUB attiva ✓", "ok")
+            except Exception as e:
+                log(f"[ERRORE] Connessione HUB fallita: {e}", "error")
+                self.after(0, lambda: self._on_done(False)); return
+
+            for mode_key, mode_label in active_modes:
+                if self._stop_requested:
+                    log("[STOP] Interruzione richiesta dall'utente.", "warn")
+                    break
+
+                log(f"\n[INFO] ── Modalità: {mode_label} ──", "info")
+                t_mode = time.time()
+
+                # 1. Leggi e valida gli indici — estrae il nome della view
+                idx_path = _QHS_INDEX_FILES[mode_key]
+                if not idx_path.exists() or not idx_path.read_text(encoding="utf-8").strip():
+                    log(f"[ERRORE] File indici mancante o vuoto: {idx_path.name}", "error")
+                    success = False; continue
+
+                idx_sql = idx_path.read_text(encoding="utf-8").strip()
+                # Estrae i nomi di tabella da tutti i CREATE INDEX ... ON <nome>
+                view_names = list(dict.fromkeys(
+                    m.group(1).lower()
+                    for m in re.finditer(
+                        r'\bON\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', idx_sql, re.IGNORECASE)
+                ))
+                if len(view_names) == 0:
+                    log(f"[ERRORE] Nessun nome di view trovato negli indici ({idx_path.name}).", "error")
+                    success = False; continue
+                if len(view_names) > 1:
+                    log(f"[ERRORE] Trovati {len(view_names)} nomi di view negli indici ({idx_path.name}): "
+                        f"{', '.join(view_names)} — deve essercene uno solo.", "error")
+                    success = False; continue
+
+                view_name = view_names[0]
+                log(f"[INFO] View target: {view_name}", "info")
+
+                # 2. Leggi la query per la materialized view
+                qry_path = _QHS_SQL_FILES[mode_key]
+                if not qry_path.exists() or not qry_path.read_text(encoding="utf-8").strip():
+                    log(f"[ERRORE] File query mancante o vuoto: {qry_path.name}", "error")
+                    success = False; continue
+
+                view_query = qry_path.read_text(encoding="utf-8").strip().lstrip("﻿")
+
+                # 3. Crea (o ricrea) la materialized view
+                log(f"[INFO] DROP MATERIALIZED VIEW IF EXISTS {view_name} ...", "info")
+                try:
+                    cur = hub_conn.cursor()
+                    cur.execute(f"DROP MATERIALIZED VIEW IF EXISTS {view_name} CASCADE")
+                    hub_conn.commit()
+                    cur.close()
+                    log(f"[OK] DROP completato ✓", "ok")
+                except Exception as e:
+                    hub_conn.rollback()
+                    log(f"[ERRORE] DROP fallito: {e}", "error")
+                    success = False; continue
+
+                log(f"[INFO] CREATE MATERIALIZED VIEW {view_name} ...", "info")
+                t_view = time.time()
+                try:
+                    import threading as _thr
+                    _done_evt = _thr.Event()
+                    def _hb_view(t0=t_view, label=view_name):
+                        while not _done_evt.wait(60):
+                            m, s = divmod(int(time.time() - t0), 60)
+                            log(f"[INFO] ⏳ CREATE VIEW {label} ancora in corso ... ({m}m {s}s)", "info")
+                    _thr.Thread(target=_hb_view, daemon=True).start()
+                    cur = hub_conn.cursor()
+                    cur.execute(f"CREATE MATERIALIZED VIEW {view_name} AS\n{view_query}")
+                    hub_conn.commit()
+                    cur.close()
+                    _done_evt.set()
+                    m, s = divmod(int(time.time() - t_view), 60)
+                    dur = f"{m}m {s}s" if m else f"{s}s"
+                    log(f"[OK] View creata in {dur} ✓", "ok")
+                except Exception as e:
+                    _done_evt.set()
+                    hub_conn.rollback()
+                    log(f"[ERRORE] CREATE MATERIALIZED VIEW fallita: {e}", "error")
+                    success = False; continue
+
+                # 4. Esegui gli indici uno per uno
+                statements = [s.strip() for s in idx_sql.split(";") if s.strip()]
+                log(f"[INFO] Creazione {len(statements)} indici ...", "info")
+                idx_errors = 0
+                for i, stmt in enumerate(statements, 1):
+                    if self._stop_requested:
+                        log("[STOP] Interruzione richiesta durante la creazione degli indici.", "warn")
+                        break
+                    t_idx = time.time()
+                    try:
+                        _done_idx = _thr.Event()
+                        def _hb_idx(t0=t_idx, n=i, tot=len(statements)):
+                            while not _done_idx.wait(60):
+                                m, s = divmod(int(time.time() - t0), 60)
+                                log(f"[INFO] ⏳ Indice {n}/{tot} ancora in corso ... ({m}m {s}s)", "info")
+                        _thr.Thread(target=_hb_idx, daemon=True).start()
+                        cur = hub_conn.cursor()
+                        cur.execute(stmt)
+                        hub_conn.commit()
+                        cur.close()
+                        _done_idx.set()
+                        elapsed_idx = time.time() - t_idx
+                        m, s = divmod(int(elapsed_idx), 60)
+                        dur_idx = f"{m}m {s}s" if m else f"{s}s"
+                        log(f"[OK] Indice {i}/{len(statements)} creato in {dur_idx} ✓", "ok")
+                    except Exception as e:
+                        _done_idx.set()
+                        hub_conn.rollback()
+                        log(f"[ERRORE] Indice {i}/{len(statements)} fallito: {e}", "error")
+                        idx_errors += 1
+
+                elapsed_mode = time.time() - t_mode
+                if idx_errors:
+                    log(f"[WARN] Modalità '{mode_label}' completata con {idx_errors} errori in {elapsed_mode:.1f}s", "warn")
+                    success = False
+                else:
+                    log(f"[OK] Modalità '{mode_label}' completata in {elapsed_mode:.1f}s ✓", "ok")
+
+            hub_conn.close()
+
+        except Exception as e:
+            log(f"[ERRORE] Errore imprevisto: {e}", "error")
+            success = False
+        finally:
+            elapsed_total = time.time() - t_total
+            log(f"\n[INFO] Pipeline terminata in {elapsed_total:.1f}s — "
+                f"{'SUCCESSO' if success else 'CON ERRORI'}", "ok" if success else "error")
+            self.after(0, lambda s=success: self._on_done(s))
+
+    def _on_done(self, success: bool):
+        self._running = False
+        self._qhs_btn.configure(fg=TEXT_PRI, cursor="hand2")
+        self._qhs_btn_stop.configure(fg=TEXT_SEC, cursor="arrow")
+        self._status_var.set("Completato." if success else "Errore.")
+
+    # ── Tab CSV ───────────────────────────────────────────────────────────
+
+    # Mapping fisso: (label, nome tabella target)
+    _CSV_ENTRIES = [
+        ("dfkkop",                      "dfkkop"),
+        ("afb",                         "afb"),
+        ("z_invoice_sap_per_quadratura", "z_invoice_sap_per_quadratura"),
+    ]
+
+    # Colonne attese per tabella (ordine non rilevante, case-sensitive)
+    _CSV_EXPECTED_COLS = {
+        "dfkkop": [
+            "opbel", "data_rata", "importo_rata", "augrd",
+            "cliente", "commodity", "cc", "contract",
+        ],
+        "afb": [
+            "prm", "kraken_account", "action", "data_rata",
+            "importo_rata", "opbel", "file_name", "plan_id", "cliente",
+        ],
+        "z_invoice_sap_per_quadratura": [
+            "KRAKEN_XBLNR", "DATA_INSERIMENTO", "GPART", "VKONT",
+            "BLART", "PIANO_AFB", "KRAKEN_ID_PLAN", "POINT_DELIVERY", "KRAKEN_ACCOUNT",
+        ],
+    }
+
+    def _build_csv_tab(self, parent):
+        self._csv_path_var   = tkinter.StringVar(value="—")
+        self._csv_table_var  = tkinter.StringVar(value=self._CSV_ENTRIES[0][1])
+        self._csv_is_running = False
+        self._csv_log_queue  = queue.Queue()
+        self._csv_load_btn   = None
+        self._csv_status_ico = None
+        self._csv_path_lbl   = None
+
+        outer = Frame(parent, bg=BG)
+        outer.pack(fill="both", expand=True, padx=16, pady=12)
+
+        card = Frame(outer, bg=BG_CARD, highlightthickness=1,
+                     highlightbackground=BORDER)
+        card.pack(fill="x", pady=(0, 8))
+
+        # ── Header ────────────────────────────────────────────────────────
+        hdr = Frame(card, bg=BG_CARD2)
+        hdr.pack(fill="x")
+        Label(hdr, text="Tabella target", bg=BG_CARD2, fg=TEXT_PRI,
+              font=("Consolas", 9, "bold"), padx=14, pady=8,
+              anchor="w").pack(side="left")
+
+        load_btn = self._make_icon_btn(hdr, "⬆", self._csv_start, ACCENT)
+        load_btn.pack(side="right", padx=(0, 8))
+        self._attach_tooltip(load_btn, "Upload")
+        self._csv_load_btn = load_btn
+
+        Frame(card, bg=BORDER, height=1).pack(fill="x")
+
+        # ── Picklist tabella ──────────────────────────────────────────────
+        pick_row = Frame(card, bg=BG_CARD)
+        pick_row.pack(fill="x", padx=14, pady=(10, 6))
+
+        table_names = [t for _, t in self._CSV_ENTRIES]
+
+        pick_frame = Frame(pick_row, bg=BG_INPUT, highlightthickness=1,
+                           highlightbackground=BORDER, cursor="hand2")
+        pick_frame.pack(side="left")
+        pick_lbl = Label(pick_frame, textvariable=self._csv_table_var,
+                         bg=BG_INPUT, fg=TEXT_PRI, font=("Consolas", 10),
+                         padx=10, pady=4, width=30, anchor="w")
+        pick_lbl.pack(side="left")
+        Label(pick_frame, text="▾", bg=BG_INPUT, fg=TEXT_SEC,
+              font=("Consolas", 9), padx=6).pack(side="left")
+
+        def _open_menu(e=None):
+            menu = tkinter.Menu(self, tearoff=0, bg=BG_CARD2, fg=TEXT_PRI,
+                                activebackground=ACCENT2, activeforeground=TEXT_PRI,
+                                font=("Consolas", 10), bd=0, relief="flat")
+            for tbl in table_names:
+                menu.add_command(label=tbl,
+                                 command=lambda t=tbl: self._csv_table_var.set(t))
+            menu.post(pick_frame.winfo_rootx(),
+                      pick_frame.winfo_rooty() + pick_frame.winfo_height())
+
+        pick_frame.bind("<Button-1>", _open_menu)
+        pick_lbl.bind("<Button-1>",   _open_menu)
+
+        # ── Ultimo caricamento (a destra della picklist) ──────────────────
+        Label(pick_row, text="|", bg=BG_CARD, fg=BORDER,
+              font=("Consolas", 10), padx=8).pack(side="left")
+        self._csv_meta_var = tkinter.StringVar(value="")
+        meta_lbl = Label(pick_row, textvariable=self._csv_meta_var,
+                         bg=BG_CARD, fg=TEXT_SEC, font=("Consolas", 8),
+                         anchor="w")
+        meta_lbl.pack(side="left", fill="x", expand=True)
+
+        def _load_table_comment(table_name: str):
+            """Legge il commento della tabella dal DB e aggiorna il label."""
+            def _fetch():
+                try:
+                    conn = get_hub_connection()
+                    cur  = conn.cursor()
+                    cur.execute(
+                        "SELECT obj_description(oid, 'pg_class') "
+                        "FROM pg_class WHERE relname = %s", (table_name,))
+                    row = cur.fetchone()
+                    cur.close(); conn.close()
+                    txt = row[0] if (row and row[0]) else None
+                    self.after(0, lambda: self._csv_meta_var.set(
+                        f"ℹ  {txt}" if txt else "ℹ  Nessun caricamento registrato"))
+                except Exception:
+                    self.after(0, lambda: self._csv_meta_var.set(""))
+            import threading as _thr
+            _thr.Thread(target=_fetch, daemon=True).start()
+
+        def _on_table_change(*_):
+            self._csv_meta_var.set("ℹ  Caricamento info ...")
+            _load_table_comment(self._csv_table_var.get())
+
+        self._csv_table_var.trace_add("write", _on_table_change)
+        _load_table_comment(self._csv_table_var.get())   # carica al build
+
+        # ── Riga file ─────────────────────────────────────────────────────
+        file_row = Frame(card, bg=BG_CARD)
+        file_row.pack(fill="x", padx=14, pady=(0, 8))
+
+        status_ico = Label(file_row, text="✗", bg=BG_CARD, fg=ERROR,
+                           font=("Consolas", 11), width=2)
+        status_ico.pack(side="left")
+        self._csv_status_ico = status_ico
+
+        path_lbl = Label(file_row, textvariable=self._csv_path_var,
+                         bg=BG_CARD, fg=TEXT_SEC, font=("Consolas", 9),
+                         anchor="w", cursor="hand2")
+        path_lbl.pack(side="left", fill="x", expand=True, padx=(6, 8))
+        self._csv_path_lbl = path_lbl
+
+        def _browse(e=None):
+            path = filedialog.askopenfilename(
+                title="Seleziona file CSV o ZIP",
+                filetypes=[("CSV / ZIP", "*.csv *.zip"), ("All files", "*.*")])
+            if path:
+                self._csv_path_var.set(path)
+                self._csv_status_ico.configure(text="✓", fg=SUCCESS)
+                self._csv_path_lbl.configure(fg=ACCENT)
+
+        browse_btn = Label(file_row, text="📁", bg=BG_CARD, fg=TEXT_SEC,
+                           font=("Consolas", 11), cursor="hand2", padx=4)
+        browse_btn.pack(side="right")
+        browse_btn.bind("<Button-1>", _browse)
+        path_lbl.bind("<Button-1>",   _browse)
+
+        # ── Drop zone ─────────────────────────────────────────────────────
+        dz_frame = Frame(card, bg=BG_CARD)
+        dz_frame.pack(fill="x", padx=8, pady=(0, 8))
+
+        def _on_dnd(event):
+            raw = event.data.strip().strip("{}")
+            if raw.lower().endswith(".csv") or raw.lower().endswith(".zip"):
+                self._csv_path_var.set(raw)
+                self._csv_status_ico.configure(text="✓", fg=SUCCESS)
+                self._csv_path_lbl.configure(fg=ACCENT)
+
+        self._build_drop_zone(dz_frame, "_csv_dz",
+                              "📂  Trascina qui il file CSV",
+                              _browse, _on_dnd)
+
+        # ── Log ───────────────────────────────────────────────────────────
+        log_frame = Frame(outer, bg=BG_CARD, highlightthickness=1,
+                          highlightbackground=BORDER)
+        log_frame.pack(fill="both", expand=True, pady=(4, 0))
+        self._build_log_panel(log_frame, log_attr="_csv_log_box",
+                              on_clear=self._csv_clear_log)
+        self._poll_csv_log()
+
+    def _poll_csv_log(self):
+        try:
+            box = self._csv_log_box
+            while True:
+                msg, level = self._csv_log_queue.get_nowait()
+                box.configure(state="normal")
+                tag = {"ok": "ok", "error": "error", "warn": "warn"}.get(level, "info")
+                box.insert("end", msg + "\n", tag)
+                box.see("end")
+                box.configure(state="disabled")
+        except Exception:
+            pass
+        self.after(100, self._poll_csv_log)
+
+    def _csv_clear_log(self):
+        self._csv_log_box.configure(state="normal")
+        self._csv_log_box.delete("1.0", "end")
+        self._csv_log_box.configure(state="disabled")
+
+    def _csv_log(self, message: str, level: str = "info"):
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        stripped = message.lstrip("\n")
+        prefix   = message[: len(message) - len(stripped)]
+        if stripped:
+            self._csv_log_queue.put((f"{prefix}[{ts}] {stripped}", level))
+        else:
+            self._csv_log_queue.put((message, level))
+
+    def _csv_start(self):
+        if self._csv_is_running:
+            return
+        table = self._csv_table_var.get()
+        path  = self._csv_path_var.get()
+        if path == "—":
+            self._status_var.set(f"⚠ Nessun file selezionato.")
+            return
+        self._csv_is_running = True
+        self._csv_load_btn.configure(fg=TEXT_SEC, cursor="arrow")
+        self._status_var.set(f"Caricamento {table} ...")
+        threading.Thread(target=self._csv_run, args=(table, path),
+                         daemon=True).start()
+
+    def _csv_run(self, table: str, path: str):
+        import time
+        import csv as _csv
+
+        log = self._csv_log
+        t   = time.time()
+
+        log(f"[INFO] ── Caricamento {table} ──", "info")
+
+        try:
+            log(f"[INFO] Connessione HUB: {os.getenv('HUB_HOST')} / {os.getenv('HUB_NAME')} ...", "info")
+            try:
+                hub_conn = get_hub_connection()
+                log("[OK] Connessione HUB attiva ✓", "ok")
+            except Exception as e:
+                log(f"[ERRORE] Connessione HUB fallita: {e}", "error")
+                self.after(0, lambda: self._csv_done(table, False)); return
+
+            # Leggi intestazione (salta righe vuote iniziali, autodetect delimitatore)
+            try:
+                with open(path, encoding="utf-8-sig", newline="") as f:
+                    # Trova prima riga non vuota per sniff delimitatore
+                    raw_header = ""
+                    skipped = 0
+                    for raw_line in f:
+                        if raw_line.strip():
+                            raw_header = raw_line
+                            break
+                        skipped += 1
+                    delimiter = ","
+                if skipped:
+                    log(f"[INFO] {skipped} riga/e vuota/e iniziale/i saltata/e.", "info")
+                reader = _csv.reader([raw_header], delimiter=delimiter)
+                cols = [c.strip() for c in next(reader)]
+                log(f"[INFO] {len(cols)} colonne rilevate: {', '.join(cols)}", "info")
+            except Exception as e:
+                log(f"[ERRORE] Lettura intestazione fallita: {e}", "error")
+                hub_conn.close()
+                self.after(0, lambda: self._csv_done(table, False)); return
+
+            # Validazione colonne (case-insensitive)
+            expected = self._CSV_EXPECTED_COLS.get(table, [])
+            cols_lower     = {c.lower() for c in cols}
+            expected_lower = {c.lower() for c in expected}
+            missing = sorted(expected_lower - cols_lower)
+            extra   = sorted(cols_lower - expected_lower)
+            if missing or extra:
+                if missing:
+                    log(f"[ERRORE] Colonne mancanti nel CSV: {', '.join(missing)}", "error")
+                if extra:
+                    log(f"[ERRORE] Colonne inattese nel CSV: {', '.join(extra)}", "error")
+                log(f"[ERRORE] Colonne attese per {table}: {', '.join(sorted(c.lower() for c in expected))}", "error")
+                hub_conn.close()
+                self.after(0, lambda: self._csv_done(table, False)); return
+            log("[OK] Colonne validate ✓", "ok")
+
+            # TRUNCATE
+            log(f"[INFO] TRUNCATE {table} ...", "info")
+            try:
+                cur = hub_conn.cursor()
+                cur.execute(f"TRUNCATE TABLE {table}")
+                hub_conn.commit()
+                cur.close()
+                log("[OK] TRUNCATE completato ✓", "ok")
+            except Exception as e:
+                hub_conn.rollback()
+                log(f"[ERRORE] TRUNCATE fallito: {e}", "error")
+                hub_conn.close()
+                self.after(0, lambda: self._csv_done(table, False)); return
+
+            # Funzione helper per aprire CSV diretto o dentro ZIP
+            import zipfile
+            import io
+
+            def _open_csv_stream(p):
+                if p.lower().endswith(".zip"):
+                    zf = zipfile.ZipFile(p, "r")
+                    csv_names = [n for n in zf.namelist()
+                                 if n.lower().endswith(".csv")]
+                    if len(csv_names) == 0:
+                        raise ValueError("Nessun file CSV trovato nello ZIP.")
+                    if len(csv_names) > 1:
+                        raise ValueError(
+                            f"Trovati {len(csv_names)} CSV nello ZIP: "
+                            f"{', '.join(csv_names)} — deve essercene uno solo.")
+                    raw = zf.open(csv_names[0])
+                    return io.TextIOWrapper(raw, encoding="utf-8-sig", newline=""), zf
+                else:
+                    return open(p, encoding="utf-8-sig", newline=""), None
+
+            # Conta righe (escluso righe vuote iniziali + header) per progress
+            # `delimiter` e `skipped` già noti dal blocco precedente
+            log("[INFO] Conteggio righe in corso ...", "info")
+            try:
+                f_count, zf_count = _open_csv_stream(path)
+                with f_count:
+                    all_lines  = f_count.readlines()
+                if zf_count:
+                    zf_count.close()
+                # trova indice prima riga non vuota (= header)
+                hdr_idx = next((i for i, l in enumerate(all_lines)
+                                if l.strip().replace(";", "")), 0)
+                total_rows = len(all_lines) - hdr_idx - 1
+                log(f"[INFO] {total_rows:,} righe da caricare.", "info")
+            except Exception as e:
+                log(f"[WARN] Conteggio righe fallito, progress non disponibile: {e}", "warn")
+                total_rows = None
+
+            # COPY a chunk
+            CHUNK = 50_000
+            cols_sql  = ", ".join(c.lower() for c in cols)
+            copy_sql  = (f"COPY {table} ({cols_sql}) FROM STDIN WITH "
+                         f"(FORMAT CSV, DELIMITER '{delimiter}', HEADER FALSE, NULL '')")
+            log(f"[INFO] COPY {table} in corso (chunk da {CHUNK:,} righe) ...", "info")
+            t_copy       = time.time()
+            rows_loaded  = 0
+            chunk_num    = 0
+
+            try:
+                from io import StringIO
+                f_main, zf_main = _open_csv_stream(path)
+                with f_main:
+                    # salta righe vuote iniziali + header
+                    for line in f_main:
+                        if line.strip().replace(";", ""):
+                            break
+                    while True:
+                        if self._stop_requested:
+                            log("[STOP] Interruzione richiesta durante il caricamento.", "warn")
+                            hub_conn.rollback()
+                            hub_conn.close()
+                            if zf_main: zf_main.close()
+                            self.after(0, lambda: self._csv_done(table, False)); return
+
+                        lines = []
+                        for _ in range(CHUNK):
+                            line = f_main.readline()
+                            if not line:
+                                break
+                            lines.append(line)
+                        if not lines:
+                            break
+
+                        chunk_num += 1
+                        buf = StringIO("".join(lines))
+                        cur = hub_conn.cursor()
+                        try:
+                            cur.copy_expert(copy_sql, buf)
+                            hub_conn.commit()
+                            cur.close()
+                        except Exception as e:
+                            hub_conn.rollback()
+                            cur.close()
+                            log(f"[ERRORE] COPY fallito al chunk {chunk_num} "
+                                f"(righe {rows_loaded:,}–{rows_loaded + len(lines):,}): {e}", "error")
+                            hub_conn.close()
+                            if zf_main: zf_main.close()
+                            self.after(0, lambda: self._csv_done(table, False)); return
+
+                        rows_loaded += len(lines)
+                        LOG_EVERY = 500_000
+                        is_last   = len(lines) < CHUNK
+                        if rows_loaded % LOG_EVERY < CHUNK or is_last:
+                            if total_rows:
+                                pct = rows_loaded / total_rows * 100
+                                log(f"[INFO] {rows_loaded:,} / {total_rows:,} righe "
+                                    f"({pct:.1f}%)", "info")
+                            else:
+                                log(f"[INFO] {rows_loaded:,} righe caricate", "info")
+
+                if zf_main: zf_main.close()
+                elapsed = time.time() - t_copy
+                m, s = divmod(int(elapsed), 60)
+                dur_str = f"{m}m {s}s" if m else f"{s}s"
+                log(f"[OK] {rows_loaded:,} righe caricate in {dur_str} ✓", "ok")
+
+                # Salva metadati ultimo caricamento nel commento della tabella
+                try:
+                    import datetime as _dt
+                    ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    comment = (f"Last load: {ts} | Duration: {dur_str} "
+                               f"| Rows: {rows_loaded:,}")
+                    cur = hub_conn.cursor()
+                    cur.execute(f"COMMENT ON TABLE {table} IS %s", (comment,))
+                    hub_conn.commit()
+                    cur.close()
+                    log(f"[INFO] Commento tabella aggiornato: {comment}", "info")
+                except Exception as e:
+                    hub_conn.rollback()
+                    log(f"[WARN] Impossibile aggiornare commento tabella: {e}", "warn")
+
+                hub_conn.close()
+                self.after(0, lambda: self._csv_done(table, True))
+            except Exception as e:
+                hub_conn.rollback()
+                log(f"[ERRORE] COPY fallito: {e}", "error")
+                hub_conn.close()
+                self.after(0, lambda: self._csv_done(table, False))
+
+        except Exception as e:
+            log(f"[ERRORE] Errore imprevisto: {e}", "error")
+            self.after(0, lambda: self._csv_done(table, False))
+        finally:
+            elapsed_tot = time.time() - t
+            log(f"[INFO] Tempo totale {table}: {elapsed_tot:.1f}s", "info")
+
+    def _csv_done(self, table: str, success: bool):
+        self._csv_is_running = False
+        self._csv_load_btn.configure(fg=ACCENT, cursor="hand2")
+        self._status_var.set(
+            f"{table}: {'✓ completato' if success else '✗ errore'}")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -13685,6 +14613,14 @@ _APPS = [
         "class":   None,
     },
     {
+        "key":     "quadratura",
+        "icon":    "⚖",
+        "label":   "Quadratura HUB-SAP",
+        "minsize": (820, 560),
+        "size":    (960, 660),
+        "class":   None,
+    },
+    {
         "key":     "bonifica",
         "icon":    "🔧",
         "label":   "Bonifica PROD",
@@ -13802,16 +14738,17 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         _APPS[2]["class"] = KrakenDataExtractor
         _APPS[3]["class"] = KrakenFullDataExtractor
         _APPS[4]["class"] = DeltaRecovery
-        _APPS[5]["class"] = BonificaProd
-        _APPS[6]["class"] = FolderCleaner
-        _APPS[7]["class"] = FolderMover
-        _APPS[8]["class"] = ZipFolder
-        _APPS[9]["class"] = FileFilter
-        _APPS[10]["class"] = JiraTicketCreator
-        _APPS[11]["class"] = CsvBlankHeaderRemover
-        _APPS[12]["class"] = InvoiceWriter
-        _APPS[13]["class"] = HubFilterUpdater
-        _APPS[14]["class"] = FileValidator
+        _APPS[5]["class"] = QuadraturaHubSap
+        _APPS[6]["class"] = BonificaProd
+        _APPS[7]["class"] = FolderCleaner
+        _APPS[8]["class"] = FolderMover
+        _APPS[9]["class"] = ZipFolder
+        _APPS[10]["class"] = FileFilter
+        _APPS[11]["class"] = JiraTicketCreator
+        _APPS[12]["class"] = CsvBlankHeaderRemover
+        _APPS[13]["class"] = InvoiceWriter
+        _APPS[14]["class"] = HubFilterUpdater
+        _APPS[15]["class"] = FileValidator
 
         # Impedisce sleep, screensaver e spegnimento display
         # finché il tool è aperto (Windows only, silenzioso su altri OS)
@@ -14839,7 +15776,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         tkinter.Frame(sb, bg=_SB_BORDER, height=1).pack(fill="x")
 
         _SB_GROUPS = [
-            ("db",   "🗄", "DATABASE", ["hubconsole", "hub", "kraken", "analysis", "delta", "bonifica", "hfupdater"]),
+            ("db",   "🗄", "DATABASE", ["hubconsole", "hub", "kraken", "analysis", "delta", "quadratura", "bonifica", "hfupdater"]),
             ("file", "📁", "FILE",     ["cleaner", "mover", "zipper", "ppfilter", "csvremover", "invoicewriter", "validator"]),
             ("jira", "🎫", "JIRA",     ["jira"]),
         ]
