@@ -1,3 +1,6 @@
+### v1.7.2 — 2026-09-18
+- **HUB Filter — On Hold → Filtro**: fix `null value in column "id"` — rimosso `id` dall'INSERT su `sap_filter_contract`, ora generato dalla sequenza `bigserial` della tabella
+
 ### v1.7.1 — 2026-09-11
 - **Kraken Full Data Extractor**: refactoring UI — sezione Pipeline spostata in tab; aggiunta tab Data Input con sottotab Invoice (identifier EB.../GB...) per il Delta
 - **Kraken Full Data Extractor — Delta Invoice**: nuova sezione collassabile "Delta" nella sidebar — DELETE + ricaricamento selettivo da Kraken per gli identifier indicati in Data Input; filtro `AND document.identifier IN (...)` iniettato nella query

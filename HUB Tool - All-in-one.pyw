@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.7.1"
+VERSION_LAUNCHER = "1.7.2"
 
 
 _REQUIRED = {
@@ -14721,11 +14721,12 @@ class HubFilterUpdater(_AppBase):
                 return
 
             # INSERT into sap_filter_contract (escludi già presenti)
+            # id escluso: generato dalla sequenza della tabella target
             cur.execute(f"""
                 INSERT INTO public.sap_filter_contract
-                    (id, commodity, contract, execute_time_stamp, kraken_account,
+                    (commodity, contract, execute_time_stamp, kraken_account,
                      sap_list_supply_csv, supply_code, batch_id, "uuid")
-                SELECT id, commodity, contract, execute_time_stamp, kraken_account,
+                SELECT commodity, contract, execute_time_stamp, kraken_account,
                        %s AS sap_list_supply_csv, supply_code, batch_id, "uuid"
                 FROM public.sap_filter_contract_on_hold oh
                 JOIN unnest(ARRAY[{prm_list}]) AS x(prmnum)
