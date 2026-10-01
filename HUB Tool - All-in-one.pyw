@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.7.2"
+VERSION_LAUNCHER = "1.7.3"
 
 
 _REQUIRED = {
@@ -9365,9 +9365,9 @@ class FileFilter(_AppBase):
             _key_ok   = lambda k: bool(_key_re.match(k)) and ' ' not in k
             _fmt_hint = 'Formato atteso: R{ref}D{YYYYMMDD}T{PAYMENT|REJECT|""}'
         else:
-            _key_re   = _re.compile(r'^[A-Za-z0-9]+$')
+            _key_re   = _re.compile(r'^[A-Za-z0-9_]+$')
             _key_ok   = lambda k: bool(_key_re.match(k))
-            _fmt_hint = "Solo lettere e cifre (niente spazi, - _ o altri caratteri speciali)"
+            _fmt_hint = "Solo lettere, cifre e _ (niente spazi, - o altri caratteri speciali)"
 
         def _validate(raw):
             stripped     = [(i, line.strip()) for i, line in enumerate(raw) if line.strip()]

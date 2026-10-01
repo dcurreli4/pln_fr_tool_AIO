@@ -1,3 +1,6 @@
+### v1.7.3 — 2026-10-01
+- **File Filter — Payment**: fix validazione chiavi reference — underscore `_` ora accettato (regex `^[A-Za-z0-9_]+$`)
+
 ### v1.7.2 — 2026-09-18
 - **HUB Filter — On Hold → Filtro**: fix `null value in column "id"` — rimosso `id` dall'INSERT su `sap_filter_contract`, ora generato dalla sequenza `bigserial` della tabella
 
