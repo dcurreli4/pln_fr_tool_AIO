@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.7.3"
+VERSION_LAUNCHER = "1.8.0"
 
 
 _REQUIRED = {
@@ -11844,6 +11844,622 @@ class InvoiceWriter(_AppBase):
         self._status_var.set("✓ Completato." if ok else "✗ Errore durante l'esecuzione.")
 
 
+class PaymentWriter(_AppBase):
+    """Wrapper GUI per Payment Writer — lista payment reference + bottone Avvia + log."""
+
+    _PW_INPUT_FILE = Path(__file__).parent / "input" / "payment writer" / "data_input.txt"
+    _PW_OUTPUT_DIR = Path(__file__).parent / "output" / "payment writer"
+    _PW_ERROR_DIR  = Path(__file__).parent / "error"  / "payment writer"
+
+    def __init__(self, master):
+        super().__init__(master, bg=BG)
+        self._log_queue = queue.Queue()
+        self._running   = False
+        self._build_ui()
+        self._load_payment_input()
+        self._poll_log()
+
+    def _build_ui(self):
+        self._build_status_bar()
+        self._build_notebook([
+            ("  ▶  Pipeline  ",    self._build_pipeline_tab),
+            ("  📋  Data Input  ", self._build_data_input_tab),
+        ])
+
+    # ── Tab Pipeline ──────────────────────────────────────────────────────
+
+    def _build_pipeline_tab(self, parent):
+        left, right = self._build_panel_layout(parent, left_width=220)
+
+        Label(left, text="Lettura payment da Kraken in base alle "
+                         "payment reference configurate nella tab Data Input.",
+              bg=BG_CARD, fg=TEXT_SEC, font=("Consolas", 9),
+              anchor="w", justify="left", wraplength=190, padx=14, pady=14
+              ).pack(fill="x")
+
+        Frame(left, bg=BORDER, height=1).pack(fill="x", padx=14)
+
+        btn_frame = Frame(left, bg=BG_CARD)
+        btn_frame.pack(side="bottom", fill="x", padx=14, pady=12)
+        row = Frame(btn_frame, bg=BG_CARD)
+        row.pack(fill="x")
+        self._btn = self._make_btn(row, "▶  Avvia", self._start)
+        self._btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self._make_btn(row, "🗑  Pulisci", self._clean_folders,
+                       color=ERROR).pack(side="left")
+        self._make_btn(btn_frame, "📂  Output", self._open_output_folder).pack(fill="x", pady=(6, 0))
+
+        self._build_log_panel(right, on_clear=self._clear_log)
+
+    # ── Tab Data Input ───────────────────────────────────────────────────
+
+    def _build_data_input_tab(self, parent):
+        hdr = Frame(parent, bg=BG)
+        hdr.pack(fill="x", padx=16, pady=(12, 0))
+        Label(hdr, text="Data Input  —  Payment Reference", bg=BG, fg=TEXT_PRI,
+              font=("Consolas", 11, "bold")).pack(side="left")
+        Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(8, 0))
+        Label(parent, text="Ogni riga: REFERENCE ; PAYMENT_DATE (YYYY-MM-DD).",
+              bg=BG, fg=TEXT_SEC, font=("Consolas", 9), anchor="w", pady=6).pack(fill="x", padx=16)
+
+        toolbar = Frame(parent, bg=BG)
+        toolbar.pack(fill="x", padx=16, pady=(0, 6))
+        self._make_btn(toolbar, "✏️  Modifica / Aggiungi", self._reference_paste_popup,
+                       color=SUCCESS).pack(side="left", padx=(0, 6))
+        self._make_btn(toolbar, "🗑  Svuota righe", self._reference_clear_all,
+                       color=ERROR).pack(side="left")
+
+        table_frame = Frame(parent, bg=BG_CARD,
+                            highlightthickness=1, highlightbackground=BORDER)
+        table_frame.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+
+        style = ttk.Style()
+        style.configure("PWInput.Treeview",
+                        background=BG_CARD, foreground=TEXT_PRI,
+                        fieldbackground=BG_CARD, rowheight=26,
+                        font=("Consolas", 10), borderwidth=0)
+        style.configure("PWInput.Treeview.Heading",
+                        background=BG_CARD2, foreground=ACCENT,
+                        font=("Consolas", 9, "bold"), relief="flat")
+        style.map("PWInput.Treeview",
+                  background=[("selected", ACCENT2)],
+                  foreground=[("selected", TEXT_PRI)])
+
+        cols = ("reference", "payment_date")
+        self._ref_tree = ttk.Treeview(table_frame, columns=cols,
+                                      show="headings", style="PWInput.Treeview",
+                                      selectmode="browse")
+        self._ref_tree.heading("reference",    text="Payment Reference")
+        self._ref_tree.heading("payment_date", text="Payment Date")
+        self._ref_tree.column("reference",    width=420, minwidth=200, anchor="w")
+        self._ref_tree.column("payment_date", width=140, minwidth=100, anchor="w")
+
+        vsb = ttk.Scrollbar(table_frame, orient="vertical",
+                            command=self._ref_tree.yview,
+                            style="Dark.Vertical.TScrollbar")
+        def _ref_scroll(f, l):
+            if float(f) <= 0.0 and float(l) >= 1.0:
+                if vsb.winfo_ismapped():
+                    vsb.after(1, vsb.pack_forget)
+            else:
+                if not vsb.winfo_ismapped():
+                    vsb.after(1, lambda: vsb.pack(side="right", fill="y", before=self._ref_tree))
+            vsb.set(f, l)
+        vsb.pack(side="right", fill="y")
+        self._ref_tree.configure(yscrollcommand=_ref_scroll)
+        self._ref_tree.pack(fill="both", expand=True)
+
+        footer = Frame(parent, bg=BG)
+        footer.pack(fill="x", padx=16, pady=(0, 4))
+        self._ref_count_var = tkinter.StringVar(value="")
+        Label(footer, textvariable=self._ref_count_var,
+              bg=BG, fg=TEXT_SEC, font=("Consolas", 9)).pack(side="left")
+
+    # ── Reference ─────────────────────────────────────────────────────────
+
+    _DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
+
+    def _reference_paste_popup(self):
+        def _validate(raw):
+            import re as _re
+            valid_rows, invalid_nos, seen = [], [], {}
+            for i, line in enumerate(raw):
+                line_s = line.strip()
+                if not line_s:
+                    continue
+                parts  = [p.strip() for p in line_s.split(";")]
+                ref    = parts[0] if len(parts) >= 1 else ""
+                date   = parts[1] if len(parts) >= 2 else ""
+                line_no = i + 1
+                ok = bool(ref) and bool(date) and bool(self._DATE_RE.match(date))
+                if not ok:
+                    invalid_nos.append(line_no)
+                    continue
+                key = (ref, date)
+                if key in seen:
+                    invalid_nos.append(line_no)
+                    first = seen[key]
+                    if first not in invalid_nos:
+                        invalid_nos.append(first)
+                    valid_rows = [r for r in valid_rows if (r[0], r[1]) != key]
+                else:
+                    seen[key] = line_no
+                    valid_rows.append((ref, date))
+            error_msg = (
+                f"⚠  {len(invalid_nos)} riga/e non valida/e — correggi e riprova. "
+                "(Formato: REFERENCE;YYYY-MM-DD, nessun duplicato)"
+                if invalid_nos else ""
+            )
+            return valid_rows, invalid_nos, error_msg
+
+        self._paste_popup(
+            title="Modifica / Aggiungi reference",
+            subtitle="Formato: REFERENCE ; PAYMENT_DATE (YYYY-MM-DD)\nUna riga per coppia. Righe vuote ignorate.",
+            tree=self._ref_tree,
+            count_var=self._ref_count_var,
+            empty_warning="⚠  Nessuna reference trovata.",
+            count_label_fn=lambda n: f"{n} righe.",
+            save_fn=self._save_reference_input,
+            undo=True,
+            validate_fn=_validate,
+            load_existing_fn=lambda t: "\n".join(
+                ";".join(t.item(iid, "values")) for iid in t.get_children()
+                if t.item(iid, "values")
+            ),
+            insert_fn=lambda t, r: t.insert("", "end", values=r),
+        )
+
+    def _reference_clear_all(self):
+        if not self._ref_tree.get_children():
+            return
+        if messagebox.askyesno("Svuota righe", "Sei sicuro di voler rimuovere tutte le righe?"):
+            self._ref_tree.delete(*self._ref_tree.get_children())
+            self._ref_count_var.set("0 righe.")
+            self._save_reference_input()
+
+    def _save_reference_input(self):
+        rows = []
+        for iid in self._ref_tree.get_children():
+            vals = self._ref_tree.item(iid, "values")
+            if vals:
+                rows.append(";".join(vals))
+        try:
+            self._PW_INPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self._PW_INPUT_FILE.write_text(
+                "\n".join(rows) + "\n" if rows else "", encoding="utf-8")
+            self._status_var.set(f"✓ data_input.txt salvato ({len(rows)} righe).")
+        except Exception as e:
+            messagebox.showerror("Errore salvataggio", str(e))
+
+    def _load_payment_input(self):
+        for row in self._ref_tree.get_children():
+            self._ref_tree.delete(row)
+        if not self._PW_INPUT_FILE.exists():
+            self._ref_count_var.set("File non trovato — verrà creato al salvataggio.")
+            return
+        try:
+            lines = self._PW_INPUT_FILE.read_text(encoding="utf-8").splitlines()
+            count = 0
+            for line in lines:
+                line_s = line.strip()
+                if not line_s:
+                    continue
+                parts = [p.strip() for p in line_s.split(";")]
+                if len(parts) >= 2 and parts[0] and parts[1]:
+                    self._ref_tree.insert("", "end", values=(parts[0], parts[1]))
+                    count += 1
+            self._ref_count_var.set(f"{count} righe caricate.")
+        except Exception as e:
+            self._ref_count_var.set(f"Errore lettura: {e}")
+
+    def _open_output_folder(self):
+        import os as _os
+        self._PW_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        _os.startfile(str(self._PW_OUTPUT_DIR))
+
+    def _clean_folders(self):
+        if not messagebox.askyesno("Pulisci cartelle",
+                                   "Vuoi eliminare tutti i file nelle cartelle output ed error di Payment Writer?"):
+            return
+        import shutil as _shutil
+        cleaned = 0
+        for folder in (self._PW_OUTPUT_DIR, self._PW_ERROR_DIR):
+            if folder.exists():
+                for item in folder.iterdir():
+                    if item.is_dir():
+                        _shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                    cleaned += 1
+        msg = f"✓ Cartelle pulite ({cleaned} elementi rimossi)."
+        self._status_var.set(msg)
+        self._enqueue_log(f"[OK] {msg}", "ok")
+
+    def _start(self):
+        if self._running:
+            return
+        if not self._ref_tree.get_children():
+            messagebox.showwarning("Nessuna reference",
+                                   "Aggiungi almeno una coppia reference/data prima di avviare.")
+            return
+        self._running = True
+        self._btn.configure(fg=TEXT_SEC, cursor="arrow")
+        self._status_var.set("Esecuzione in corso...")
+        threading.Thread(target=self._worker, daemon=True).start()
+
+    def _worker(self):
+        import logging as _logging
+        import re as _re
+        import time as _time
+        from collections import defaultdict as _defaultdict
+
+        class _QueueHandler(_logging.Handler):
+            def __init__(self, q):
+                super().__init__()
+                self._q = q
+            def emit(self, record):
+                msg = self.format(record)
+                tag = "error" if record.levelno >= _logging.ERROR else (
+                      "warn"  if record.levelno >= _logging.WARNING else "info")
+                self._q.put((msg, tag))
+
+        _pw_log = _logging.getLogger("payment_writer")
+        _pw_log.setLevel(_logging.INFO)
+        _pw_log.propagate = False
+
+        handler = _QueueHandler(self._log_queue)
+        handler.setFormatter(_logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        _pw_log.addHandler(handler)
+
+        try:
+            # ── legge le reference dalla UI ──────────────────────────────
+            input_rows = []
+            for iid in self._ref_tree.get_children():
+                vals = self._ref_tree.item(iid, "values")
+                if vals and len(vals) >= 2 and vals[0].strip() and vals[1].strip():
+                    input_rows.append((vals[0].strip(), vals[1].strip()))
+            if not input_rows:
+                _pw_log.warning("Nessuna coppia reference/data configurata.")
+                self.after(0, self._done, False)
+                return
+
+            references  = list({r for r, d in input_rows})
+            dates       = list({d for r, d in input_rows})
+            _pw_log.info("Coppie reference/data caricate: %d", len(input_rows))
+            _t_start = _time.perf_counter()
+
+            # ── costanti / dir ────────────────────────────────────────────
+            run_ts     = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir = self._PW_OUTPUT_DIR / run_ts
+            output_dir.mkdir(parents=True, exist_ok=True)
+            error_dir  = self._PW_ERROR_DIR / run_ts
+            error_dir.mkdir(parents=True, exist_ok=True)
+            _pw_log.info("Cartella output: %s", output_dir.name)
+            skipped_rows = []  # accumula scarti di tutti i commodity
+
+            # ── helper: set_payment_type ──────────────────────────────────
+            def _set_payment_type(row):
+                transaction_type = (row.get("transaction_type") or "").strip()
+                status           = (row.get("status")           or "").strip()
+                amount           = (row.get("amount")           or "").strip()
+                source           = (row.get("source")           or "").strip()
+                psa              = (row.get("payment_schedule_amount") or "").strip()
+                reason           = (row.get("reason")            or "").strip()  # j_kraken_payments: reason
+                payment_type     = (row.get("payment_type")     or "").strip()
+                initial_reason   = (row.get("initial_payment_reason") or "").strip()
+                if not transaction_type or not status:
+                    return ""
+                transaction_type = transaction_type.upper().replace(" ", "_")
+                payment_type     = payment_type.upper().replace(" ", "_")
+                source           = source.upper().replace(" ", "_")
+                reason           = reason.upper().replace(" ", "_")
+                initial_reason   = initial_reason.upper().replace(" ", "_")
+                def eq(a, b): return a.upper() == b.upper()
+                amount_abs       = amount.replace("-", "")
+                is_amount_eq_psa = amount_abs.upper() == psa.upper()
+                is_psa_null      = not psa
+                if eq(status, "CLEARED"):
+                    if eq(transaction_type, "BACS_DEPOSIT") and eq(payment_type, "PAYMENT"):
+                        if eq(source, "CABOT") or eq(source, "MANUAL"):           return "KV"
+                        if eq(source, "REV_CABOT") or eq(source, "REV_CONCENTRIX"): return "KL"
+                    if eq(transaction_type, "CREDIT_CARD") and eq(payment_type, "PAYMENT"):          return "KB"
+                    if eq(transaction_type, "CREDIT_OR_DEBIT_CARD") and eq(payment_type, "PAYMENT"): return "KB"
+                    if eq(transaction_type, "PREPAID_CARD") and eq(payment_type, "PAYMENT"):         return "KB"
+                    if eq(transaction_type, "DEBIT_CARD") and eq(payment_type, "PAYMENT"):           return "KB"
+                    if eq(transaction_type, "CHEQUE") and eq(payment_type, "PAYMENT"):
+                        if eq(source, "MANUAL") or eq(source, "CABOT"):           return "KC"
+                    if eq(transaction_type, "CASH") and eq(payment_type, "PAYMENT"):                 return "KE"
+                    if eq(transaction_type, "DD_REGULAR_COLLECTION") and eq(payment_type, "PAYMENT"):
+                        if eq(source, "GOCARDLESS"):                              return "KW"
+                        if eq(source, "MANUAL") and is_amount_eq_psa:            return "K1"
+                        if eq(source, "KRAKEN") and eq(reason, "REGULAR_SCHEDULE"): return "K1"
+                        if eq(source, "MANUAL") and not is_amount_eq_psa and not is_psa_null: return "K2"
+                        if eq(source, "KRAKEN") and (eq(reason, "SETTLEMENT") or eq(reason, "BILL_ISSUED")): return "K2"
+                        if eq(source, "MANUAL") and not is_amount_eq_psa and is_psa_null:
+                            return "K1" if row.get("_has_matching_plan", False) else "K2"
+                if eq(status, "FAILED"):
+                    if transaction_type.upper() in ("CREDIT_CARD", "DEBIT_CARD", "PREPAID_CARD", "CREDIT_OR_DEBIT_CARD"):
+                        if eq(payment_type, "REJECT"): return "IK"
+                        if eq(payment_type, "PAYMENT"): return "KB"
+                    if eq(transaction_type, "DD_REGULAR_COLLECTION") and eq(payment_type, "REJECT"):
+                        if eq(source, "KRAKEN"):
+                            if eq(reason, "REGULAR_SCHEDULE"):                    return "R1"
+                            if eq(reason, "SETTLEMENT") or eq(reason, "BILL_ISSUED"): return "R2"
+                        if eq(source, "MANUAL"):
+                            if is_amount_eq_psa:                                  return "R1"
+                            if is_psa_null:
+                                return "R1" if row.get("_has_matching_plan", False) else "R2"
+                            return "R2"
+                    if eq(transaction_type, "DD_REGULAR_COLLECTION") and eq(payment_type, "PAYMENT"):
+                        if eq(source, "MANUAL") and is_amount_eq_psa:            return "K1"
+                        if eq(source, "KRAKEN") and eq(reason, "REGULAR_SCHEDULE"): return "K1"
+                        if eq(source, "MANUAL") and not is_amount_eq_psa:        return "K2"
+                        if eq(source, "KRAKEN") and (eq(reason, "SETTLEMENT") or eq(reason, "BILL_ISSUED")): return "K2"
+                    if eq(transaction_type, "CHEQUE") and eq(source, "CABOT"):
+                        if eq(payment_type, "REJECT") or eq(payment_type, "PAYMENT"): return "AK"
+                if eq(status, "PAID"):
+                    if eq(transaction_type, "CHEQUE") and eq(payment_type, "PAYMENT"):
+                        if eq(source, "MANUAL") or eq(source, "KRAKEN"): return "CK"
+                        if eq(source, "BNPPARIBAS"):                     return "AK"
+                    if eq(transaction_type, "DIRECT_CREDIT") and eq(payment_type, "PAYMENT"):
+                        if eq(source, "DIRECT_DEBIT_REVERSAL") or eq(source, "GOCARDLESS"):
+                            if eq(initial_reason, "SETTLEMENT") or eq(initial_reason, "BILL_ISSUED"): return "R2"
+                            if eq(initial_reason, "REGULAR_SCHEDULE"):            return "R1"
+                        elif eq(source, "KRAKEN") or eq(source, "MANUAL"):       return "VK"
+                    if eq(transaction_type, "DD_REGULAR_COLLECTION"):             return ""
+                return ""
+
+            # ── helper: extract_id_remise ─────────────────────────────────
+            _ID_REMISE_RE = _re.compile(r"_([A-Z]?\d+)_")
+            def _extract_id_remise(filename):
+                if not filename: return ""
+                m = _ID_REMISE_RE.search(filename)
+                if not m: return ""
+                code = m.group(1)
+                if code and code[0].isalpha(): code = code[1:]
+                if len(code) > 7: code = code[-7:]
+                return code
+
+            # ── helper: map_row_to_sap_dto ────────────────────────────────
+            def _map_row(row, doc_type, commodity):
+                def s(v): return (v or "").strip()
+                reference = s(row.get("payment_id")) if doc_type.upper() in ("KV", "KL") else s(row.get("reference"))
+                return {
+                    "paymentType":               doc_type,
+                    "statement":                 "",
+                    "status":                    s(row.get("status")),
+                    "paymentReason":             s(row.get("reason")).upper(),        # j_kraken_payments: reason
+                    "source":                    s(row.get("source")).upper(),
+                    "segmentation":              s(row.get("account_type")).upper(),
+                    "pointOfDelivery":           s(row.get("supply_point")),          # j_kraken_payments: supply_point
+                    "krakenAccount":             s(row.get("account_number")),
+                    "amount":                    s(row.get("amount")),
+                    "valueDate":                 s(row.get("payment_date")).replace("-", ""),
+                    "paymentScheduleAmount":     s(row.get("payment_schedule_amount")),
+                    "sapPlanId":                 "",
+                    "reference":                 reference,
+                    "billingDocumentIdentifier": "",
+                    "agreementId":               "",
+                    "splitCounter":              "",
+                    "chequeId":                  "",
+                    "failureReasonCode":         s(row.get("failure_reason_code")),
+                    "paymentId":                 s(row.get("payment_id")),
+                    "repaymentId":               s(row.get("repayment_id")),
+                    "evtId":                     "",
+                    "evtType":                   "",
+                    "segmentName":               "RESIDENT",
+                    "_fileName":      _extract_id_remise(s(row.get("filename"))),
+                    "_commodity":    commodity,
+                }
+
+            # ── helper: format_amount ─────────────────────────────────────
+            def _format_amount(c):
+                if not c: return "0,00"
+                return f"{float(c) / 100:.2f}".replace(".", ",")
+
+            # ── helper: build_payment_row ─────────────────────────────────
+            _CSV_FIELDS = [
+                "paymentType", "statement", "status", "paymentReason", "source",
+                "segmentation", "pointOfDelivery", "krakenAccount", "amount",
+                "valueDate", "paymentScheduleAmount", "sapPlanId", "reference",
+                "billingDocumentIdentifier", "agreementId", "splitCounter",
+                "chequeId", "failureReasonCode", "paymentId", "repaymentId",
+                "evtId", "evtType", "segmentName",
+            ]
+            def _build_row(dto, value_date):
+                d = dict(dto)
+                d["valueDate"] = value_date
+                d["amount"]    = _format_amount(d["amount"])
+                d["paymentScheduleAmount"] = _format_amount(d["paymentScheduleAmount"]) if d.get("paymentScheduleAmount") else ""
+                return ";".join(str(d.get(f, "") or "").replace("/", "") for f in _CSV_FIELDS)
+
+            # ── helper: write_csv_file ────────────────────────────────────
+            def _write_csv(payments, commodity):
+                if not payments: return ""
+                vd           = (payments[0]["valueDate"] or "").replace("-", "").replace("/", "")
+                payment_type = payments[0]["paymentType"]
+                segmentation = payments[0]["segmentation"]
+                id_remise    = payments[0].get("_fileName", "")
+                seg_initial  = segmentation[0].upper() if segmentation else "R"
+                commodity_c  = "E" if commodity.upper() == "ELEC" else "G"
+                ts           = __import__("datetime").datetime.now().strftime("%m%d%H%M%S")
+                filename     = f"K{commodity_c}_{payment_type}_{seg_initial}_{ts}_{vd}.csv"
+                filepath     = output_dir / filename
+                total_cents  = sum(float(p["amount"] or 0) for p in payments)
+                total_amount = f"{total_cents / 100:.2f}".replace(".", ",")
+                header       = ";".join(["PM", str(len(payments)), vd, total_amount, "EUR", id_remise])
+                rows_lines   = [_build_row(p, vd) for p in payments]
+                filepath.write_text(
+                    header + "\n" + "\n".join(rows_lines) + "\nPM;END\n",
+                    encoding="utf-8"
+                )
+                _time.sleep(1.2)
+                return filename
+
+            # ── helper: group_payments ────────────────────────────────────
+            def _group(dtos):
+                groups = _defaultdict(list)
+                for dto in dtos:
+                    vd = dto["valueDate"]
+                    pt = dto["paymentType"]
+                    fn = dto.get("_fileName", "")
+                    key = (vd, pt, fn or "NO_ID_REMISE") if pt.upper() in ("KC", "AK") else (vd, pt, "")
+                    groups[key].append(dto)
+                return groups
+
+            # ── helper: load_payments dal DB ──────────────────────────────
+            import psycopg2.extras as _pgextras
+            def _load(conn, commodity):
+                sql = """
+                    SELECT *
+                    FROM j_kraken_payments
+                    WHERE EXISTS (
+                        SELECT 1 FROM unnest(%(references)s::text[], %(dates)s::text[])
+                               AS inp(ref, dt)
+                        WHERE inp.ref = reference
+                          AND inp.dt  = payment_date
+                    )
+                      AND commodity = %(commodity)s
+                      AND UPPER(status) IN ('CLEARED', 'FAILED', 'PAID')
+                """
+                with conn.cursor(cursor_factory=_pgextras.RealDictCursor) as cur:
+                    cur.execute(sql, {
+                        "references": [r for r, d in input_rows],
+                        "dates":      [d for r, d in input_rows],
+                        "commodity":  commodity.upper(),
+                    })
+                    return [dict(r) for r in cur.fetchall()]
+
+            # ── pipeline per ogni commodity ───────────────────────────────
+            _all_dtos = []
+            for commodity in ("ELEC", "GAS"):
+                _pw_log.info("── Commodity: %s ──────────────────────────────────", commodity)
+                conn = get_hub_connection()
+                conn.autocommit = True
+                try:
+                    rows = _load(conn, commodity)
+                finally:
+                    conn.close()
+                _pw_log.info("Righe lette: %d", len(rows))
+                if not rows:
+                    _pw_log.warning("Nessun pagamento trovato per commodity=%s", commodity)
+                    continue
+
+                dtos, skipped = [], 0
+                for row in rows:
+                    doc_type = _set_payment_type(row)
+                    if not doc_type:
+                        skipped += 1
+                        skipped_rows.append({
+                            "commodity":        commodity,
+                            "reference":        row.get("reference", ""),
+                            "payment_id":       row.get("payment_id", ""),
+                            "status":           row.get("status", ""),
+                            "transaction_type": row.get("transaction_type", ""),
+                            "payment_type":     row.get("payment_type", ""),
+                            "source":           row.get("source", ""),
+                            "reason":           row.get("reason", ""),
+                            "motivo":           "doc_type non mappato",
+                        })
+                        continue
+                    if not (row.get("account_type") or "").strip():
+                        skipped += 1
+                        skipped_rows.append({
+                            "commodity":        commodity,
+                            "reference":        row.get("reference", ""),
+                            "payment_id":       row.get("payment_id", ""),
+                            "status":           row.get("status", ""),
+                            "transaction_type": row.get("transaction_type", ""),
+                            "payment_type":     row.get("payment_type", ""),
+                            "source":           row.get("source", ""),
+                            "reason":           row.get("reason", ""),
+                            "motivo":           "segmentation (account_type) vuota",
+                        })
+                        continue
+                    dtos.append(_map_row(row, doc_type, commodity))
+
+                _all_dtos.extend(dtos)
+                _pw_log.info("DTO validi: %d  |  scartati: %d", len(dtos), skipped)
+                if not dtos:
+                    _pw_log.warning("Nessun DTO da scrivere per commodity=%s", commodity)
+                    continue
+
+                groups = _group(dtos)
+                total_files = len(groups)
+                _pw_log.info("File da generare per %s: %d", commodity, total_files)
+                written = []
+                for key, group_dtos in sorted(groups.items()):
+                    fname = _write_csv(group_dtos, commodity)
+                    if fname:
+                        written.append(fname)
+                    self.after(0, self._status_var.set,
+                               f"Esecuzione in corso... {commodity} {len(written)}/{total_files}")
+                _pw_log.info("File generati per %s: %d/%d", commodity, len(written), total_files)
+
+            # ── recap per tipologia ───────────────────────────────────────
+            from collections import Counter as _Counter
+            recap_elec = _Counter(dto["paymentType"] for dto in _all_dtos if dto.get("_commodity") == "ELEC")
+            recap_gas  = _Counter(dto["paymentType"] for dto in _all_dtos if dto.get("_commodity") == "GAS")
+            all_types  = sorted(recap_elec.keys() | recap_gas.keys())
+            if all_types:
+                def _log_raw(msg, tag="info"):
+                    self._log_queue.put((msg, tag))
+                col_w = max(max(len(t) for t in all_types), 4)
+                sep   = "─" * (col_w + 24)
+                _log_raw("")
+                _log_raw(f"{'Type':<{col_w}}  {'ALL':>6}  {'ELEC':>6}  {'GAS':>6}", "section")
+                _log_raw(sep, "section")
+                for pt in all_types:
+                    elec  = recap_elec.get(pt, 0)
+                    gas   = recap_gas.get(pt, 0)
+                    total = elec + gas
+                    _log_raw(f"{pt:<{col_w}}  {total:>6}  {elec:>6}  {gas:>6}", "info")
+                _log_raw(sep, "section")
+
+            # ── verifica somma totale (deve essere 0) ─────────────────────
+            total_cents = sum(
+                float((row.get("amount") or "0").replace(",", "."))
+                for row in _all_dtos
+            )
+            total_fmt = f"{total_cents / 100:.2f}".replace(".", ",")
+            if abs(total_cents) < 0.01:
+                self._enqueue_log(f"[OK] Somma totale: {total_fmt} EUR (bilancia a zero)", "ok")
+            else:
+                self._enqueue_log(f"[ERRORE] Somma totale: {total_fmt} EUR — non bilancia a zero!", "error")
+            _elapsed = int(_time.perf_counter() - _t_start)
+            _pw_log.info("Tempo totale: %dh %02dm %02ds", _elapsed // 3600, (_elapsed % 3600) // 60, _elapsed % 60)
+
+            # ── scarti: scrivi file di dettaglio ──────────────────────────
+            if skipped_rows:
+                import csv as _csv
+                error_file = error_dir / "scarti.csv"
+                fieldnames = ["commodity", "reference", "payment_id", "status",
+                              "transaction_type", "payment_type", "source", "reason", "motivo"]
+                with open(error_file, "w", newline="", encoding="utf-8") as f:
+                    w = _csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
+                    w.writeheader()
+                    w.writerows(skipped_rows)
+                _pw_log.warning("Scarti totali: %d — dettaglio in error/%s/scarti.csv",
+                                len(skipped_rows), run_ts)
+            else:
+                _pw_log.info("Nessuno scarto.")
+
+            self.after(0, self._done, True, output_dir)
+        except Exception as e:
+            self._enqueue_log(f"[ERRORE] {e}", "error")
+            self.after(0, self._done, False, None)
+        finally:
+            _pw_log.removeHandler(handler)
+
+    def _done(self, ok, output_dir=None):
+        self._running = False
+        self._btn.configure(fg=ACCENT, cursor="hand2")
+        self._status_var.set("✓ Completato." if ok else "✗ Errore durante l'esecuzione.")
+        if ok and output_dir:
+            import os as _os
+            _os.startfile(str(output_dir))
+
+
 class CsvBlankHeaderRemover(_AppBase):
 
     def __init__(self, master):
@@ -15016,6 +15632,14 @@ _APPS = [
         "class":   None,
     },
     {
+        "key":     "paymentwriter",
+        "icon":    "💳",
+        "label":   "Payment Writer",
+        "minsize": (700, 520),
+        "size":    (960, 640),
+        "class":   None,
+    },
+    {
         "key":     "hfupdater",
         "icon":    "🔁",
         "label":   "HUB Filter",
@@ -15078,8 +15702,9 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
         _APPS[11]["class"] = JiraTicketCreator
         _APPS[12]["class"] = CsvBlankHeaderRemover
         _APPS[13]["class"] = InvoiceWriter
-        _APPS[14]["class"] = HubFilterUpdater
-        _APPS[15]["class"] = FileValidator
+        _APPS[14]["class"] = PaymentWriter
+        _APPS[15]["class"] = HubFilterUpdater
+        _APPS[16]["class"] = FileValidator
 
         # Impedisce sleep, screensaver e spegnimento display
         # finché il tool è aperto (Windows only, silenzioso su altri OS)
@@ -16108,7 +16733,7 @@ class Launcher(_TkDnD.Tk if _HAS_DND else tkinter.Tk):
 
         _SB_GROUPS = [
             ("db",   "🗄", "DATABASE", ["hubconsole", "hub", "kraken", "analysis", "delta", "quadratura", "bonifica", "hfupdater"]),
-            ("file", "📁", "FILE",     ["cleaner", "mover", "zipper", "ppfilter", "csvremover", "invoicewriter", "validator"]),
+            ("file", "📁", "FILE",     ["cleaner", "mover", "zipper", "ppfilter", "csvremover", "invoicewriter", "paymentwriter", "validator"]),
             ("jira", "🎫", "JIRA",     ["jira"]),
         ]
         self._group_frames  = {}

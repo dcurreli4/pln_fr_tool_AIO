@@ -1,3 +1,13 @@
+### v1.8.0 — 2026-10-06
+- **Payment Writer**: nuova sezione per generazione CSV SAP da pagamenti Kraken — legge da `j_kraken_payments` (HUB prod) per coppie `(reference, payment_date)`, applica `set_payment_type()`, scrive file CSV SAP raggruppati per `(valueDate, paymentType)` (KC/AK anche per `idRemise`)
+- **Payment Writer — Data Input**: tab con tabella a due colonne `Reference` / `Payment Date (YYYY-MM-DD)`, salvataggio su `input/payment writer/data_input.txt`
+- **Payment Writer — Pipeline**: query con `unnest` per scalabilità a 50k reference; connessione per commodity (ELEC/GAS) aperta e chiusa immediatamente dopo la query per evitare timeout; sleep 1.2s per KC/AK (replica Java `Thread.sleep(1200)`)
+- **Payment Writer — Errori**: CSV scarti per run in `error/payment writer/{run_ts}/scarti.csv` con dettaglio riga e motivo
+- **Payment Writer — Recap**: tabella finale `Type | ALL | ELEC | GAS` con conteggi per tipo pagamento e zero-balance check (verde OK / rosso ERROR)
+- **Payment Writer — Tempi**: log tempo totale di esecuzione in formato `Xh Ym Zs` a fine pipeline
+- **Payment Writer — Progress**: status bar aggiornata in tempo reale durante scrittura file (`Esecuzione in corso... ELEC 247/1522`)
+- **Payment Writer — Pulsanti**: Avvia + Pulisci in linea, Output sotto (apre cartella output del run corrente)
+
 ### v1.7.3 — 2026-10-01
 - **File Filter — Payment**: fix validazione chiavi reference — underscore `_` ora accettato (regex `^[A-Za-z0-9_]+$`)
 
