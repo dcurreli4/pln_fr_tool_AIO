@@ -1,3 +1,7 @@
+### v1.8.1 — 2026-10-07
+- **Payment Writer**: filtro balance per reference — dopo la query, le reference con `SUM(amount) ≠ 0` vengono scartate in `scarti.csv` con motivo `Sum amount != 0 (sum=X.XX)`; solo le reference bilanciate proseguono alla scrittura CSV
+- **Payment Writer**: recap balance finale `Sum = 0 / Sum ≠ 0` con conteggi per ELEC/GAS/ALL — riga `Sum ≠ 0` in rosso se presente
+
 ### v1.8.0 — 2026-10-06
 - **Payment Writer**: nuova sezione per generazione CSV SAP da pagamenti Kraken — legge da `j_kraken_payments` (HUB prod) per coppie `(reference, payment_date)`, applica `set_payment_type()`, scrive file CSV SAP raggruppati per `(valueDate, paymentType)` (KC/AK anche per `idRemise`)
 - **Payment Writer — Data Input**: tab con tabella a due colonne `Reference` / `Payment Date (YYYY-MM-DD)`, salvataggio su `input/payment writer/data_input.txt`
