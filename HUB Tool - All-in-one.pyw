@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.8.3"
+VERSION_LAUNCHER = "1.8.4"
 
 
 _REQUIRED = {
@@ -11925,14 +11925,16 @@ class PaymentWriter(_AppBase):
                   background=[("selected", ACCENT2)],
                   foreground=[("selected", TEXT_PRI)])
 
-        cols = ("reference", "payment_date")
+        cols = ("reference", "payment_date", "amount")
         self._ref_tree = ttk.Treeview(table_frame, columns=cols,
                                       show="headings", style="PWInput.Treeview",
                                       selectmode="browse")
         self._ref_tree.heading("reference",    text="Payment Reference")
         self._ref_tree.heading("payment_date", text="Payment Date")
-        self._ref_tree.column("reference",    width=420, minwidth=200, anchor="w")
-        self._ref_tree.column("payment_date", width=140, minwidth=100, anchor="w")
+        self._ref_tree.heading("amount",       text="Amount")
+        self._ref_tree.column("reference",    width=340, minwidth=200, anchor="w")
+        self._ref_tree.column("payment_date", width=130, minwidth=100, anchor="w")
+        self._ref_tree.column("amount",       width=120, minwidth=80,  anchor="e")
 
         vsb = ttk.Scrollbar(table_frame, orient="vertical",
                             command=self._ref_tree.yview,
@@ -11957,44 +11959,46 @@ class PaymentWriter(_AppBase):
 
     # ── Reference ─────────────────────────────────────────────────────────
 
-    _DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
+    _DATE_RE   = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
+    _AMOUNT_RE = __import__("re").compile(r"^-?\d+[.,]\d+$")
 
     def _reference_paste_popup(self):
         def _validate(raw):
-            import re as _re
             valid_rows, invalid_nos, seen = [], [], {}
             for i, line in enumerate(raw):
                 line_s = line.strip()
                 if not line_s:
                     continue
-                parts  = [p.strip() for p in line_s.split(";")]
-                ref    = parts[0] if len(parts) >= 1 else ""
-                date   = parts[1] if len(parts) >= 2 else ""
+                parts   = [p.strip() for p in line_s.split(";")]
+                ref     = parts[0] if len(parts) >= 1 else ""
+                date    = parts[1] if len(parts) >= 2 else ""
+                amount  = parts[2] if len(parts) >= 3 else ""
                 line_no = i + 1
-                ok = bool(ref) and bool(date) and bool(self._DATE_RE.match(date))
+                ok = (bool(ref) and bool(date) and bool(self._DATE_RE.match(date))
+                      and bool(amount) and bool(self._AMOUNT_RE.match(amount)))
                 if not ok:
                     invalid_nos.append(line_no)
                     continue
-                key = (ref, date)
+                key = (ref, date, amount)
                 if key in seen:
                     invalid_nos.append(line_no)
                     first = seen[key]
                     if first not in invalid_nos:
                         invalid_nos.append(first)
-                    valid_rows = [r for r in valid_rows if (r[0], r[1]) != key]
+                    valid_rows = [r for r in valid_rows if (r[0], r[1], r[2]) != key]
                 else:
                     seen[key] = line_no
-                    valid_rows.append((ref, date))
+                    valid_rows.append((ref, date, amount))
             error_msg = (
                 f"⚠  {len(invalid_nos)} riga/e non valida/e — correggi e riprova. "
-                "(Formato: REFERENCE;YYYY-MM-DD, nessun duplicato)"
+                "(Formato: REFERENCE;YYYY-MM-DD;AMOUNT — importo con decimali obbligatori es. 44.70)"
                 if invalid_nos else ""
             )
             return valid_rows, invalid_nos, error_msg
 
         self._paste_popup(
             title="Modifica / Aggiungi reference",
-            subtitle="Formato: REFERENCE ; PAYMENT_DATE (YYYY-MM-DD)\nUna riga per coppia. Righe vuote ignorate.",
+            subtitle="Formato: REFERENCE ; PAYMENT_DATE (YYYY-MM-DD) ; AMOUNT (es. 44.70)\nImporto in euro con decimali obbligatori. Una riga per tripletta.",
             tree=self._ref_tree,
             count_var=self._ref_count_var,
             empty_warning="⚠  Nessuna reference trovata.",
@@ -12045,8 +12049,8 @@ class PaymentWriter(_AppBase):
                 if not line_s:
                     continue
                 parts = [p.strip() for p in line_s.split(";")]
-                if len(parts) >= 2 and parts[0] and parts[1]:
-                    self._ref_tree.insert("", "end", values=(parts[0], parts[1]))
+                if len(parts) >= 3 and parts[0] and parts[1] and parts[2]:
+                    self._ref_tree.insert("", "end", values=(parts[0], parts[1], parts[2]))
                     count += 1
             self._ref_count_var.set(f"{count} righe caricate.")
         except Exception as e:
@@ -12080,7 +12084,7 @@ class PaymentWriter(_AppBase):
             return
         if not self._ref_tree.get_children():
             messagebox.showwarning("Nessuna reference",
-                                   "Aggiungi almeno una coppia reference/data prima di avviare.")
+                                   "Aggiungi almeno una tripletta reference/data/amount prima di avviare.")
             return
         self._running = True
         self._btn.configure(fg=TEXT_SEC, cursor="arrow")
@@ -12116,16 +12120,14 @@ class PaymentWriter(_AppBase):
             input_rows = []
             for iid in self._ref_tree.get_children():
                 vals = self._ref_tree.item(iid, "values")
-                if vals and len(vals) >= 2 and vals[0].strip() and vals[1].strip():
-                    input_rows.append((vals[0].strip(), vals[1].strip()))
+                if vals and len(vals) >= 3 and vals[0].strip() and vals[1].strip() and vals[2].strip():
+                    input_rows.append((vals[0].strip(), vals[1].strip(), vals[2].strip()))
             if not input_rows:
                 _pw_log.warning("Nessuna coppia reference/data configurata.")
                 self.after(0, self._done, False)
                 return
 
-            references  = list({r for r, d in input_rows})
-            dates       = list({d for r, d in input_rows})
-            _pw_log.info("Coppie reference/data caricate: %d", len(input_rows))
+            _pw_log.info("Triplette reference/data/amount caricate: %d", len(input_rows))
             _t_start = _time.perf_counter()
 
             # ── costanti / dir ────────────────────────────────────────────
@@ -12322,33 +12324,88 @@ class PaymentWriter(_AppBase):
                         filename, failure_reason_code, commodity
                     FROM j_kraken_payments
                     WHERE EXISTS (
-                        SELECT 1 FROM unnest(%(references)s::text[], %(dates)s::text[])
-                               AS inp(ref, dt)
+                        SELECT 1 FROM unnest(%(references)s::text[], %(dates)s::text[], %(amounts)s::numeric[])
+                               AS inp(ref, dt, amt)
                         WHERE inp.ref = reference
                           AND inp.dt  = payment_date
+                          AND inp.amt * 100 = amount::numeric
                     )
                       AND commodity = %(commodity)s
                       AND UPPER(status) IN ('CLEARED', 'FAILED', 'PAID')
                 """
                 with conn.cursor(cursor_factory=_pgextras.RealDictCursor) as cur:
                     cur.execute(sql, {
-                        "references": [r for r, d in input_rows],
-                        "dates":      [d for r, d in input_rows],
+                        "references": [r for r, d, a in input_rows],
+                        "dates":      [d for r, d, a in input_rows],
+                        "amounts":    [a.replace(",", ".") for r, d, a in input_rows],
                         "commodity":  commodity.upper(),
                     })
                     return [dict(r) for r in cur.fetchall()]
 
-            # ── pipeline per ogni commodity ───────────────────────────────
-            _all_dtos = []
+            # ── fase 1: query su tutte le commodity ───────────────────────
+            _rows_by_commodity = {}
             for commodity in ("ELEC", "GAS"):
-                _pw_log.info("── Commodity: %s ──────────────────────────────────", commodity)
+                _pw_log.info("── Query commodity: %s ────────────────────────────", commodity)
                 conn = get_hub_connection()
                 conn.autocommit = True
                 try:
-                    rows = _load(conn, commodity)
+                    _rows_by_commodity[commodity] = _load(conn, commodity)
                 finally:
                     conn.close()
-                _pw_log.info("Righe lette: %d", len(rows))
+                _pw_log.info("Righe lette (%s): %d", commodity, len(_rows_by_commodity[commodity]))
+
+            # ── fase 2: check balance SUM(amount) per reference ───────────
+            from collections import defaultdict as _dd2
+            _ref_amounts = _dd2(float)
+            for commodity, rows in _rows_by_commodity.items():
+                for row in rows:
+                    try:
+                        _ref_amounts[row.get("reference", "")] += float(
+                            str(row.get("amount") or "0").replace(",", ".")
+                        )
+                    except ValueError:
+                        pass
+            _unbalanced = {ref for ref, s in _ref_amounts.items() if abs(s) >= 0.01}
+            if _unbalanced:
+                _pw_log.warning(
+                    "STOP — %d reference con SUM(amount) ≠ 0, nessun file generato.",
+                    len(_unbalanced)
+                )
+                for commodity, rows in _rows_by_commodity.items():
+                    for row in rows:
+                        if row.get("reference") in _unbalanced:
+                            skipped_rows.append({
+                                "commodity":        commodity,
+                                "reference":        row.get("reference", ""),
+                                "payment_id":       row.get("payment_id", ""),
+                                "status":           row.get("status", ""),
+                                "transaction_type": row.get("transaction_type", ""),
+                                "payment_type":     row.get("payment_type", ""),
+                                "source":           row.get("source", ""),
+                                "reason":           row.get("reason", ""),
+                                "motivo":           f"Sum amount != 0 (sum={_ref_amounts[row.get('reference','')]:.2f})",
+                            })
+                # scrivi scarti e termina senza scrivere CSV
+                if skipped_rows:
+                    import csv as _csv
+                    error_file = error_dir / "scarti.csv"
+                    fieldnames = ["commodity", "reference", "payment_id", "status",
+                                  "transaction_type", "payment_type", "source", "reason", "motivo"]
+                    with open(error_file, "w", newline="", encoding="utf-8") as f:
+                        w = _csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
+                        w.writeheader()
+                        w.writerows(skipped_rows)
+                    _pw_log.warning("Scarti totali: %d — dettaglio in error/%s/scarti.csv",
+                                    len(skipped_rows), run_ts)
+                self.after(0, self._done, False, None)
+                return
+            _pw_log.info("Balance check OK — tutte le reference bilanciano a 0")
+
+            # ── fase 3: mapping e scrittura per commodity ─────────────────
+            _all_dtos = []
+            for commodity in ("ELEC", "GAS"):
+                _pw_log.info("── Commodity: %s ──────────────────────────────────", commodity)
+                rows = _rows_by_commodity.get(commodity, [])
                 if not rows:
                     _pw_log.warning("Nessun pagamento trovato per commodity=%s", commodity)
                     continue

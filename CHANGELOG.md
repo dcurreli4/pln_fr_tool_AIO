@@ -1,3 +1,9 @@
+### v1.8.4 — 2026-10-07
+- **Payment Writer — Data Input**: aggiunta colonna `Amount` (decimale obbligatorio es. `44.70`) — file diventa `REFERENCE;YYYY-MM-DD;AMOUNT`
+- **Payment Writer — Query**: filtro per `(reference, payment_date, amount*100)` con `unnest` a tre array; `amount` input in euro convertito in centesimi per match con DB
+- **Payment Writer — Balance check**: query ELEC+GAS prima della scrittura, stop con scarti se almeno una reference ha `SUM(amount) ≠ 0`
+- **Payment Writer — Validazione**: amount con decimali obbligatori (`^-?\d+[.,]\d+$`), interi rifiutati
+
 ### v1.8.3 — 2026-10-07
 - **Payment Writer**: rimosso filtro balance SUM(amount) per reference e relativo recap — nessun filtraggio per somma importi
 
