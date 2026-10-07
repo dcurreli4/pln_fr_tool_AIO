@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.8.2"
+VERSION_LAUNCHER = "1.8.3"
 
 
 _REQUIRED = {
@@ -12340,7 +12340,6 @@ class PaymentWriter(_AppBase):
 
             # ── pipeline per ogni commodity ───────────────────────────────
             _all_dtos = []
-            _balance_recap = {}   # commodity → {balanced: int, unbalanced: int}
             for commodity in ("ELEC", "GAS"):
                 _pw_log.info("── Commodity: %s ──────────────────────────────────", commodity)
                 conn = get_hub_connection()
@@ -12353,40 +12352,6 @@ class PaymentWriter(_AppBase):
                 if not rows:
                     _pw_log.warning("Nessun pagamento trovato per commodity=%s", commodity)
                     continue
-
-                # ── filtro SUM(amount) per reference ─────────────────────
-                from collections import defaultdict as _dd2
-                _ref_amounts = _dd2(float)
-                for row in rows:
-                    try:
-                        _ref_amounts[row.get("reference", "")] += float(
-                            str(row.get("amount") or "0").replace(",", ".")
-                        )
-                    except ValueError:
-                        pass
-                _balanced   = {ref for ref, s in _ref_amounts.items() if abs(s) < 0.01}
-                _unbalanced = {ref for ref in _ref_amounts if ref not in _balanced}
-                for ref in sorted(_unbalanced):
-                    s = _ref_amounts[ref]
-                    for row in rows:
-                        if row.get("reference") == ref:
-                            skipped_rows.append({
-                                "commodity":        commodity,
-                                "reference":        ref,
-                                "payment_id":       row.get("payment_id", ""),
-                                "status":           row.get("status", ""),
-                                "transaction_type": row.get("transaction_type", ""),
-                                "payment_type":     row.get("payment_type", ""),
-                                "source":           row.get("source", ""),
-                                "reason":           row.get("reason", ""),
-                                "motivo":           f"Sum amount != 0 (sum={s:.2f})",
-                            })
-                _pw_log.info(
-                    "Reference bilanciate (sum=0): %d  |  sbilanciate (sum≠0): %d",
-                    len(_balanced), len(_unbalanced)
-                )
-                _balance_recap[commodity] = {"balanced": len(_balanced), "unbalanced": len(_unbalanced)}
-                rows = [r for r in rows if r.get("reference") in _balanced]
 
                 dtos, skipped = [], 0
                 for row in rows:
@@ -12458,22 +12423,6 @@ class PaymentWriter(_AppBase):
                     total = elec + gas
                     _log_raw(f"{pt:<{col_w}}  {total:>6}  {elec:>6}  {gas:>6}", "info")
                 _log_raw(sep, "section")
-
-            # ── recap balance per reference ───────────────────────────────
-            if _balance_recap:
-                _log_raw("")
-                _bal_elec  = _balance_recap.get("ELEC", {})
-                _bal_gas   = _balance_recap.get("GAS",  {})
-                _b_elec    = _bal_elec.get("balanced",   0)
-                _u_elec    = _bal_elec.get("unbalanced", 0)
-                _b_gas     = _bal_gas.get("balanced",    0)
-                _u_gas     = _bal_gas.get("unbalanced",  0)
-                _log_raw(f"{'Balance':14}  {'ALL':>6}  {'ELEC':>6}  {'GAS':>6}", "section")
-                _log_raw("─" * 38, "section")
-                _log_raw(f"{'Sum = 0':14}  {_b_elec+_b_gas:>6}  {_b_elec:>6}  {_b_gas:>6}", "ok")
-                _log_raw(f"{'Sum ≠ 0':14}  {_u_elec+_u_gas:>6}  {_u_elec:>6}  {_u_gas:>6}",
-                         "error" if (_u_elec + _u_gas) > 0 else "info")
-                _log_raw("─" * 38, "section")
 
             # ── verifica somma totale (deve essere 0) ─────────────────────
             total_cents = sum(

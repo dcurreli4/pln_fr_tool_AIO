@@ -1,3 +1,6 @@
+### v1.8.3 — 2026-10-07
+- **Payment Writer**: rimosso filtro balance SUM(amount) per reference e relativo recap — nessun filtraggio per somma importi
+
 ### v1.8.2 — 2026-10-07
 - **Payment Writer**: query con `SELECT DISTINCT` su tutte le colonne eccetto `updated_at` — elimina doppioni da `j_kraken_payments` prima del filtro balance
 
