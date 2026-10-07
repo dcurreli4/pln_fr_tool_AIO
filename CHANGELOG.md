@@ -1,3 +1,6 @@
+### v1.8.2 — 2026-10-07
+- **Payment Writer**: query con `SELECT DISTINCT` su tutte le colonne eccetto `updated_at` — elimina doppioni da `j_kraken_payments` prima del filtro balance
+
 ### v1.8.1 — 2026-10-07
 - **Payment Writer**: filtro balance per reference — dopo la query, le reference con `SUM(amount) ≠ 0` vengono scartate in `scarti.csv` con motivo `Sum amount != 0 (sum=X.XX)`; solo le reference bilanciate proseguono alla scrittura CSV
 - **Payment Writer**: recap balance finale `Sum = 0 / Sum ≠ 0` con conteggi per ELEC/GAS/ALL — riga `Sum ≠ 0` in rosso se presente

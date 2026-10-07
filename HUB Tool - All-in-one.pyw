@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.8.1"
+VERSION_LAUNCHER = "1.8.2"
 
 
 _REQUIRED = {
@@ -12311,7 +12311,15 @@ class PaymentWriter(_AppBase):
             import psycopg2.extras as _pgextras
             def _load(conn, commodity):
                 sql = """
-                    SELECT *
+                    SELECT DISTINCT
+                        account_number, account_type, amount, failed_at,
+                        first_transaction_id, payment_date, payment_id,
+                        payment_schedule_amount, payment_schedule_valid_from,
+                        payment_type, supply_point, reason, reference,
+                        repayment_id, source, status, supplementary_ledger_id,
+                        transaction_type, payment_schedule_id,
+                        billing_document_identifier, initial_payment_reason,
+                        filename, failure_reason_code, commodity
                     FROM j_kraken_payments
                     WHERE EXISTS (
                         SELECT 1 FROM unnest(%(references)s::text[], %(dates)s::text[])
