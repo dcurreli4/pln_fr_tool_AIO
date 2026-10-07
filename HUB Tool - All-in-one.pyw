@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.8.4"
+VERSION_LAUNCHER = "1.8.5"
 
 
 _REQUIRED = {
@@ -12065,19 +12065,32 @@ class PaymentWriter(_AppBase):
         if not messagebox.askyesno("Pulisci cartelle",
                                    "Vuoi eliminare tutti i file nelle cartelle output ed error di Payment Writer?"):
             return
-        import shutil as _shutil
-        cleaned = 0
-        for folder in (self._PW_OUTPUT_DIR, self._PW_ERROR_DIR):
-            if folder.exists():
-                for item in folder.iterdir():
-                    if item.is_dir():
-                        _shutil.rmtree(item)
+        self._status_var.set("Pulizia in corso...")
+
+        def _do_clean():
+            import shutil as _shutil
+            from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
+            subdirs = []
+            for folder in (self._PW_OUTPUT_DIR, self._PW_ERROR_DIR):
+                if folder.exists():
+                    subdirs += [Path(e.path) for e in os.scandir(str(folder))]
+            cleaned = len(subdirs)
+            with _TPE(max_workers=16) as ex:
+                futs = {}
+                for p in subdirs:
+                    if p.is_dir():
+                        futs[ex.submit(_shutil.rmtree, str(p), True)] = p
                     else:
-                        item.unlink()
-                    cleaned += 1
-        msg = f"✓ Cartelle pulite ({cleaned} elementi rimossi)."
-        self._status_var.set(msg)
-        self._enqueue_log(f"[OK] {msg}", "ok")
+                        futs[ex.submit(p.unlink, missing_ok=True)] = p
+                for _ in _ac(futs):
+                    pass
+            for folder in (self._PW_OUTPUT_DIR, self._PW_ERROR_DIR):
+                folder.mkdir(parents=True, exist_ok=True)
+            msg = f"✓ Cartelle pulite ({cleaned} elementi rimossi)."
+            self.after(0, self._status_var.set, msg)
+            self._enqueue_log(f"[OK] {msg}", "ok")
+
+        threading.Thread(target=_do_clean, daemon=True).start()
 
     def _start(self):
         if self._running:
@@ -12401,21 +12414,27 @@ class PaymentWriter(_AppBase):
                 return
             _pw_log.info("Balance check OK — tutte le reference bilanciano a 0")
 
-            # ── fase 3: mapping e scrittura per commodity ─────────────────
-            _all_dtos = []
-            for commodity in ("ELEC", "GAS"):
-                _pw_log.info("── Commodity: %s ──────────────────────────────────", commodity)
+            # ── fase 3: mapping e scrittura per commodity (parallele) ────────
+            import threading as _threading
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+
+            _results      = {}   # commodity → {"dtos": [], "skipped": []}
+            _total_files  = {"ELEC": 0, "GAS": 0}
+            _written_all  = {"ELEC": [], "GAS": []}
+            _written_lock = _threading.Lock()
+
+            def _process_commodity(commodity):
                 rows = _rows_by_commodity.get(commodity, [])
                 if not rows:
                     _pw_log.warning("Nessun pagamento trovato per commodity=%s", commodity)
-                    continue
+                    _results[commodity] = {"dtos": [], "skipped": []}
+                    return
 
-                dtos, skipped = [], 0
+                dtos, skipped_local = [], []
                 for row in rows:
                     doc_type = _set_payment_type(row)
                     if not doc_type:
-                        skipped += 1
-                        skipped_rows.append({
+                        skipped_local.append({
                             "commodity":        commodity,
                             "reference":        row.get("reference", ""),
                             "payment_id":       row.get("payment_id", ""),
@@ -12428,8 +12447,7 @@ class PaymentWriter(_AppBase):
                         })
                         continue
                     if not (row.get("account_type") or "").strip():
-                        skipped += 1
-                        skipped_rows.append({
+                        skipped_local.append({
                             "commodity":        commodity,
                             "reference":        row.get("reference", ""),
                             "payment_id":       row.get("payment_id", ""),
@@ -12443,23 +12461,68 @@ class PaymentWriter(_AppBase):
                         continue
                     dtos.append(_map_row(row, doc_type, commodity))
 
-                _all_dtos.extend(dtos)
-                _pw_log.info("DTO validi: %d  |  scartati: %d", len(dtos), skipped)
+                _results[commodity] = {"dtos": dtos, "skipped": skipped_local}
+                _pw_log.info("── Commodity: %s ── DTO validi: %d  |  scartati: %d",
+                             commodity, len(dtos), len(skipped_local))
                 if not dtos:
                     _pw_log.warning("Nessun DTO da scrivere per commodity=%s", commodity)
-                    continue
+                    return
 
                 groups = _group(dtos)
-                total_files = len(groups)
-                _pw_log.info("File da generare per %s: %d", commodity, total_files)
-                written = []
-                for key, group_dtos in sorted(groups.items()):
-                    fname = _write_csv(group_dtos, commodity)
-                    if fname:
-                        written.append(fname)
+                _total_files[commodity] = len(groups)
+                total_c = _total_files["ELEC"] + _total_files["GAS"]
+                _pw_log.info("File da generare per %s: %d", commodity, len(groups))
+
+                seq_items = [(k, g) for k, g in sorted(groups.items()) if k[1].upper() in ("KC", "AK")]
+                par_items = [(k, g) for k, g in sorted(groups.items()) if k[1].upper() not in ("KC", "AK")]
+
+                def _update_status():
+                    ne = len(_written_all["ELEC"]); te = _total_files["ELEC"]
+                    ng = len(_written_all["GAS"]);  tg = _total_files["GAS"]
+                    parts = []
+                    if te: parts.append(f"ELEC {ne}/{te}")
+                    if tg: parts.append(f"GAS {ng}/{tg}")
                     self.after(0, self._status_var.set,
-                               f"Esecuzione in corso... {commodity} {len(written)}/{total_files}")
-                _pw_log.info("File generati per %s: %d/%d", commodity, len(written), total_files)
+                               f"Esecuzione in corso... {' | '.join(parts)}")
+
+                def _write_and_track(key_group):
+                    _, grp = key_group
+                    fname = _write_csv(grp, commodity)
+                    if fname:
+                        with _written_lock:
+                            _written_all[commodity].append(fname)
+                        _update_status()
+
+                with _TPE(max_workers=8) as _ex:
+                    list(_ex.map(_write_and_track, par_items))
+
+                for key, grp in seq_items:
+                    fname = _write_csv(grp, commodity)
+                    if fname:
+                        with _written_lock:
+                            _written_all[commodity].append(fname)
+                    _update_status()
+
+                _pw_log.info("File generati per %s: %d/%d",
+                             commodity, len(_written_all[commodity]), _total_files[commodity])
+
+            with _TPE(max_workers=2) as _com_ex:
+                list(_com_ex.map(_process_commodity, ("ELEC", "GAS")))
+
+            # ── merge risultati ───────────────────────────────────────────
+            _all_dtos    = _results.get("ELEC", {}).get("dtos", []) + _results.get("GAS", {}).get("dtos", [])
+            skipped_rows = _results.get("ELEC", {}).get("skipped", []) + _results.get("GAS", {}).get("skipped", [])
+
+            # ── zip output ────────────────────────────────────────────────
+            import zipfile as _zf
+            all_written = _written_all["ELEC"] + _written_all["GAS"]
+            if all_written:
+                zip_path = output_dir / "payments.zip"
+                self.after(0, self._status_var.set, "Creazione ZIP...")
+                with _zf.ZipFile(zip_path, "w", _zf.ZIP_DEFLATED) as zf:
+                    for fpath in all_written:
+                        zf.write(fpath, Path(fpath).name)
+                _pw_log.info("ZIP creato: %s (%d file)", zip_path.name, len(all_written))
 
             # ── recap per tipologia ───────────────────────────────────────
             from collections import Counter as _Counter

@@ -1,3 +1,10 @@
+### v1.8.5 — 2026-10-07
+- **Payment Writer**: commodity ELEC e GAS elaborate in parallelo (`ThreadPoolExecutor(max_workers=2)`) — variabili separate per DTO e scarti, merge finale
+- **Payment Writer**: scrittura file CSV parallelizzata per commodity (`max_workers=8`), KC/AK restano sequenziali con `sleep(1.2)`
+- **Payment Writer**: status bar mostra `ELEC X/TOT | GAS X/TOT` in tempo reale durante la scrittura
+- **Payment Writer**: creazione `payments.zip` nella cartella del run dopo la scrittura — file CSV direttamente nella root dello ZIP
+- **Payment Writer — Pulisci**: eliminazione parallela con `ThreadPoolExecutor(max_workers=16)` in thread background — non blocca la UI
+
 ### v1.8.4 — 2026-10-07
 - **Payment Writer — Data Input**: aggiunta colonna `Amount` (decimale obbligatorio es. `44.70`) — file diventa `REFERENCE;YYYY-MM-DD;AMOUNT`
 - **Payment Writer — Query**: filtro per `(reference, payment_date, amount*100)` con `unnest` a tre array; `amount` input in euro convertito in centesimi per match con DB
