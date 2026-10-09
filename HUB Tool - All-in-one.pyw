@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.8.5"
+VERSION_LAUNCHER = "1.8.6"
 
 
 _REQUIRED = {
@@ -12306,7 +12306,7 @@ class PaymentWriter(_AppBase):
                 rows_lines   = [_build_row(p, vd) for p in payments]
                 filepath.write_text(
                     header + "\n" + "\n".join(rows_lines) + "\nPM;END\n",
-                    encoding="utf-8"
+                    encoding="utf-8", newline="\n"
                 )
                 _time.sleep(1.2)
                 return filename

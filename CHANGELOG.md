@@ -1,3 +1,6 @@
+### v1.8.6 — 2026-10-09
+- **Payment Writer**: file CSV scritti con LF forzato (`newline="\n"`) invece di CRLF
+
 ### v1.8.5 — 2026-10-07
 - **Payment Writer**: commodity ELEC e GAS elaborate in parallelo (`ThreadPoolExecutor(max_workers=2)`) — variabili separate per DTO e scarti, merge finale
 - **Payment Writer**: scrittura file CSV parallelizzata per commodity (`max_workers=8`), KC/AK restano sequenziali con `sleep(1.2)`
