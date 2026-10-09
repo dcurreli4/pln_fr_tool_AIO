@@ -24,7 +24,7 @@ except Exception:
 
 
 
-VERSION_LAUNCHER = "1.8.6"
+VERSION_LAUNCHER = "1.8.7"
 
 
 _REQUIRED = {
@@ -12521,7 +12521,8 @@ class PaymentWriter(_AppBase):
                 self.after(0, self._status_var.set, "Creazione ZIP...")
                 with _zf.ZipFile(zip_path, "w", _zf.ZIP_DEFLATED) as zf:
                     for fpath in all_written:
-                        zf.write(fpath, Path(fpath).name)
+                        full = output_dir / fpath
+                        zf.write(full, Path(fpath).name)
                 _pw_log.info("ZIP creato: %s (%d file)", zip_path.name, len(all_written))
 
             # ── recap per tipologia ───────────────────────────────────────

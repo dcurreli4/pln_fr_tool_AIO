@@ -1,3 +1,6 @@
+### v1.8.7 — 2026-10-09
+- **Payment Writer**: fix ZIP — path completo dei file CSV ora risolto correttamente (`output_dir / filename`)
+
 ### v1.8.6 — 2026-10-09
 - **Payment Writer**: file CSV scritti con LF forzato (`newline="\n"`) invece di CRLF
 
